@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import asdict, is_dataclass
 
 sys.path.insert(0, os.path.abspath("src"))
 
@@ -199,10 +200,16 @@ def _render_diagnosis(result: dict) -> None:
     st.code(json.dumps(result, ensure_ascii=False, indent=2), language="json")
 
 
-def _meta_block(title: str, meta: dict) -> None:
-    cache_text = "缓存" if meta.get("from_cache") else "实时拉取"
-    stale_text = "，已使用旧缓存兜底" if meta.get("used_stale_cache") else ""
-    age = meta.get("cache_age_seconds")
+def _meta_block(title: str, meta: object) -> None:
+    meta_dict = _normalize_meta(meta)
+
+    if meta_dict is None:
+        st.info("{title} 暂无可展示的来源信息。".format(title=title))
+        return
+
+    cache_text = "缓存" if meta_dict.get("from_cache") else "实时拉取"
+    stale_text = "，已使用旧缓存兜底" if meta_dict.get("used_stale_cache") else ""
+    age = meta_dict.get("cache_age_seconds")
     age_text = ""
     if age is not None:
         age_text = "，缓存年龄约 {age:.0f} 秒".format(age=age)
@@ -217,14 +224,26 @@ def _meta_block(title: str, meta: dict) -> None:
         </div>
         """.format(
             title=title,
-            source=meta.get("source_provider"),
-            resolved=meta.get("resolved_provider"),
+            source=meta_dict.get("source_provider"),
+            resolved=meta_dict.get("resolved_provider"),
             cache_text=cache_text,
             stale_text=stale_text,
             age_text=age_text,
         ),
         unsafe_allow_html=True,
     )
+
+
+def _normalize_meta(meta: object) -> dict | None:
+    if meta is None:
+        return None
+    if isinstance(meta, dict):
+        return meta
+    if is_dataclass(meta):
+        return asdict(meta)
+    if hasattr(meta, "__dict__"):
+        return dict(vars(meta))
+    return None
 
 
 def _inject_styles() -> None:
