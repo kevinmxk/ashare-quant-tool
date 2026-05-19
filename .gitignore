@@ -2,7 +2,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.uv-cache/
 dist/
 .env
 data/cache/*.sqlite3
-
+streamlit-ui*.log
