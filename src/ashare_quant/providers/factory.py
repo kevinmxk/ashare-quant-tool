@@ -71,44 +71,20 @@ def _build_named_provider(provider_name: str, settings: Settings) -> MarketDataP
         provider = CompositeMarketDataProvider(providers)
         return _wrap_provider(provider, settings)
 
+    if provider_name in {"mock"}:
+        return _wrap_provider(MockMarketDataProvider(), settings)
+
     if provider_name in {"akshare", "ak"}:
-        try:
-            provider = AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
-        except Exception:
-            if not settings.use_mock_when_provider_fails:
-                raise
-            provider = MockMarketDataProvider()
-        return _wrap_provider(provider, settings)
+        return _wrap_provider(_build_preferred_runtime_chain("akshare", settings), settings)
 
     if provider_name in {"sina", "sina-finance"}:
-        try:
-            provider = SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
-        except Exception:
-            if not settings.use_mock_when_provider_fails:
-                raise
-            provider = MockMarketDataProvider()
-        return _wrap_provider(provider, settings)
+        return _wrap_provider(_build_preferred_runtime_chain("sina", settings), settings)
 
     if provider_name in {"tushare", "ts"}:
-        try:
-            provider = TushareMarketDataProvider(
-                token=settings.tushare_token,
-                cache_ttl_seconds=max(settings.provider_cache_ttl_seconds, 300),
-            )
-        except Exception:
-            if not settings.use_mock_when_provider_fails:
-                raise
-            provider = MockMarketDataProvider()
-        return _wrap_provider(provider, settings)
+        return _wrap_provider(_build_preferred_runtime_chain("tushare", settings), settings)
 
     if provider_name in {"baostock", "bs"}:
-        try:
-            provider = BaostockMarketDataProvider()
-        except Exception:
-            if not settings.use_mock_when_provider_fails:
-                raise
-            provider = MockMarketDataProvider()
-        return _wrap_provider(provider, settings)
+        return _wrap_provider(_build_preferred_runtime_chain("baostock", settings), settings)
 
     return _wrap_provider(MockMarketDataProvider(), settings)
 
@@ -142,6 +118,50 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
         pass
 
     return providers
+
+
+def _build_preferred_runtime_chain(preferred: str, settings: Settings) -> MarketDataProvider:
+    ordered_names: list[str] = []
+    for name in [preferred, "sina", "akshare", "tushare", "baostock"]:
+        normalized = name.strip().lower()
+        if normalized not in ordered_names:
+            ordered_names.append(normalized)
+
+    providers: list[MarketDataProvider] = []
+    for name in ordered_names:
+        try:
+            providers.append(_build_single_runtime_provider(name, settings))
+        except Exception:
+            continue
+
+    if not providers and not settings.use_mock_when_provider_fails:
+        raise RuntimeError(
+            "No runtime providers are available for preferred provider: {name}".format(name=preferred)
+        )
+
+    if settings.use_mock_when_provider_fails:
+        providers.append(MockMarketDataProvider())
+
+    if len(providers) == 1:
+        return providers[0]
+    return CompositeMarketDataProvider(providers)
+
+
+def _build_single_runtime_provider(provider_name: str, settings: Settings) -> MarketDataProvider:
+    if provider_name in {"akshare", "ak"}:
+        return AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
+    if provider_name in {"sina", "sina-finance"}:
+        return SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
+    if provider_name in {"tushare", "ts"}:
+        return TushareMarketDataProvider(
+            token=settings.tushare_token,
+            cache_ttl_seconds=max(settings.provider_cache_ttl_seconds, 300),
+        )
+    if provider_name in {"baostock", "bs"}:
+        return BaostockMarketDataProvider()
+    if provider_name == "mock":
+        return MockMarketDataProvider()
+    raise RuntimeError("Unsupported provider: {name}".format(name=provider_name))
 
 
 def _wrap_provider(provider: MarketDataProvider, settings: Settings) -> MarketDataProvider:

@@ -151,15 +151,18 @@ class TushareMarketDataProvider(MarketDataProvider):
         return records[0]
 
     def _fetch_qfq_daily_records(self, ts_code: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
-        data = self._ts.pro_bar(
-            ts_code=ts_code,
-            adj="qfq",
-            start_date=start_date,
-            end_date=end_date,
-        )
-        records = dataframe_to_records(data)
-        if records:
-            return records
+        try:
+            data = self._ts.pro_bar(
+                ts_code=ts_code,
+                adj="qfq",
+                start_date=start_date,
+                end_date=end_date,
+            )
+            records = dataframe_to_records(data)
+            if records:
+                return records
+        except Exception:
+            pass
 
         fallback = self._pro.daily(
             ts_code=ts_code,

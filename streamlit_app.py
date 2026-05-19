@@ -110,8 +110,12 @@ def main() -> None:
     )
 
     if selected_view == "策略榜单":
-        with st.spinner("正在加载策略榜单..."):
-            rankings = load_rankings(service, ranking_limit, selected_strategy)
+        try:
+            with st.spinner("正在加载策略榜单..."):
+                rankings = load_rankings(service, ranking_limit, selected_strategy)
+        except Exception as exc:
+            _render_runtime_error("策略榜单", exc, status)
+            return
         summary = summarize_rankings(rankings)
         metric_cols = st.columns(4)
         metric_cols[0].metric("策略", selected_name)
@@ -135,15 +139,21 @@ def main() -> None:
                 diagnosis = load_diagnosis(service, stock_symbol, selected_strategy)
         except KeyError:
             _render_lookup_error(stock_symbol, status)
+        except Exception as exc:
+            _render_runtime_error("单股诊断", exc, status)
         else:
             _render_diagnosis(diagnosis_to_dict(diagnosis))
     elif selected_view == "自选池":
         st.markdown("### 自选池观察")
         watchlist = parse_watchlist(watchlist_text)
         if watchlist:
-            with st.spinner("正在加载自选池..."):
-                rows = load_watchlist_rows(service, tuple(watchlist), selected_strategy)
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            try:
+                with st.spinner("正在加载自选池..."):
+                    rows = load_watchlist_rows(service, tuple(watchlist), selected_strategy)
+            except Exception as exc:
+                _render_runtime_error("自选池", exc, status)
+            else:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         else:
             st.info("在左侧输入一组股票代码后，这里会显示自选池诊断结果。")
     else:
@@ -256,6 +266,30 @@ def _render_lookup_error(symbol: str, status: dict) -> None:
         """.format(configured=configured_provider, active=active_provider),
         unsafe_allow_html=True,
     )
+
+
+def _render_runtime_error(module_name: str, exc: Exception, status: dict) -> None:
+    st.error("{module} 当前加载失败。".format(module=module_name))
+    st.code(str(exc) or exc.__class__.__name__)
+    st.info("建议先查看“系统状态”页里的数据源路由和 provider_diagnostics，确认当前主源和回退源是否都可用。")
+
+    routes = status.get("provider_routes")
+    if routes:
+        st.markdown(
+            """
+            <div class="meta-card">
+              <div class="meta-title">当前路由</div>
+              <div>榜单：{ranking}</div>
+              <div>单股诊断：{diagnosis}</div>
+              <div>自选池：{watchlist}</div>
+            </div>
+            """.format(
+                ranking=routes.get("ranking"),
+                diagnosis=routes.get("diagnosis"),
+                watchlist=routes.get("watchlist"),
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 def _render_provider_banner(status: dict) -> None:

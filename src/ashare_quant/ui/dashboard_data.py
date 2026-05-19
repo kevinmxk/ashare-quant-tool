@@ -49,7 +49,7 @@ def build_watchlist_rows(service: MarketService, symbols: list[str], strategy: s
     for symbol in symbols:
         try:
             result = service.diagnose_watchlist_stock(symbol, strategy=strategy)
-        except KeyError:
+        except Exception as exc:
             rows.append(
                 {
                     "symbol": symbol,
@@ -58,8 +58,8 @@ def build_watchlist_rows(service: MarketService, symbols: list[str], strategy: s
                     "eligible": "否",
                     "latest_price": "-",
                     "pct_change": "-",
-                    "entry_signal": "当前数据源未收录该股票代码",
-                    "failed_filters": "请检查数据源或股票代码格式",
+                    "entry_signal": "当前诊断请求失败，已跳过该股票",
+                    "failed_filters": _format_watchlist_error(exc),
                 }
             )
             continue
@@ -132,3 +132,8 @@ def diagnosis_to_dict(result: StockDiagnosisResult) -> dict:
 
 def normalize_ui_strategy(strategy: str) -> str:
     return normalize_strategy(strategy)
+
+
+def _format_watchlist_error(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or exc.__class__.__name__
