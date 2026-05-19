@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ashare_quant.config import get_settings
-from ashare_quant.providers.factory import build_provider
+from ashare_quant.providers.factory import build_provider_bundle
 from ashare_quant.services.market_service import MarketService
 from ashare_quant.ui.dashboard_data import (
     build_rankings_table,
@@ -14,8 +14,15 @@ from ashare_quant.ui.dashboard_data import (
 
 def main() -> None:
     settings = get_settings()
-    provider = build_provider(settings)
-    service = MarketService(provider)
+    bundle = build_provider_bundle(settings)
+    provider = bundle.default_provider
+    service = MarketService(
+        provider,
+        universe_provider=bundle.universe_provider,
+        ranking_provider=bundle.ranking_provider,
+        diagnosis_provider=bundle.diagnosis_provider,
+        watchlist_provider=bundle.watchlist_provider,
+    )
 
     rankings = service.rank_universe(limit=5, strategy="trend")
     rows = build_rankings_table(rankings)

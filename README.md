@@ -125,6 +125,10 @@ uvicorn ashare_quant.api.main:app --reload
 - `auto` 模式会依次尝试 `AKShare -> Sina -> Tushare -> BaoStock -> Mock`
 - 当前机器缺少依赖时自动回退到 `Mock`
 - 也支持显式选择 `provider=sina`，适合补充新浪财经的实时行情与日线接口
+- 支持按场景路由 provider：
+  `ASHARE_QUANT_UNIVERSE_PROVIDER`、`ASHARE_QUANT_RANKING_PROVIDER`、`ASHARE_QUANT_DIAGNOSIS_PROVIDER`、`ASHARE_QUANT_WATCHLIST_PROVIDER`
+- 推荐的小额度 `Tushare` 配置是：
+  榜单/股票池走 `sina`，单股诊断走 `tushare`
 - 股票代码支持 `000001`、`sz000001`、`SH600519` 等常见格式
 - `AKShare` 列名清洗统一收敛在 `src/ashare_quant/providers/akshare_cleaner.py`
 - 跨数据源的代码格式和日期处理统一收敛在 `src/ashare_quant/providers/shared_cleaner.py`

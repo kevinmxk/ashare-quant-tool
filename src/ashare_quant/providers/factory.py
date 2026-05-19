@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ashare_quant.cache.provider_cache import PersistentCacheMarketDataProvider
 from ashare_quant.cache.sqlite_cache import SqliteMarketCache
 from ashare_quant.config import Settings
@@ -12,68 +14,103 @@ from ashare_quant.providers.sina_provider import SinaMarketDataProvider
 from ashare_quant.providers.tushare_provider import TushareMarketDataProvider
 
 
+@dataclass(frozen=True)
+class ProviderBundle:
+    default_provider: MarketDataProvider
+    universe_provider: MarketDataProvider
+    ranking_provider: MarketDataProvider
+    diagnosis_provider: MarketDataProvider
+    watchlist_provider: MarketDataProvider
+
+
 def build_provider(settings: Settings) -> MarketDataProvider:
-    provider = _build_raw_provider(settings)
-    _attach_provider_diagnostics(provider, settings)
-    if not settings.persistent_cache_enabled:
-        return provider
+    return build_provider_bundle(settings).default_provider
 
-    cache = SqliteMarketCache(settings.persistent_cache_path)
-    wrapped = PersistentCacheMarketDataProvider(
-        provider=provider,
-        cache=cache,
-        quote_ttl_seconds=settings.persistent_quote_ttl_seconds,
-        bar_ttl_seconds=settings.persistent_bar_ttl_seconds,
-        allow_stale_on_error=settings.persistent_cache_allow_stale_on_error,
+
+def build_provider_bundle(settings: Settings) -> ProviderBundle:
+    instances: dict[str, MarketDataProvider] = {}
+
+    def resolve(provider_name: str) -> MarketDataProvider:
+        normalized = (provider_name or "auto").strip().lower()
+        if normalized not in instances:
+            instances[normalized] = _build_named_provider(normalized, settings)
+        return instances[normalized]
+
+    default_name = settings.provider
+    universe_name = settings.universe_provider or default_name
+    ranking_name = settings.ranking_provider or universe_name
+    diagnosis_name = settings.diagnosis_provider or default_name
+    watchlist_name = settings.watchlist_provider or universe_name
+
+    bundle = ProviderBundle(
+        default_provider=resolve(default_name),
+        universe_provider=resolve(universe_name),
+        ranking_provider=resolve(ranking_name),
+        diagnosis_provider=resolve(diagnosis_name),
+        watchlist_provider=resolve(watchlist_name),
     )
-    _attach_provider_diagnostics(wrapped, settings)
-    return wrapped
+
+    route_summary = {
+        "default": bundle.default_provider.provider_name,
+        "universe": bundle.universe_provider.provider_name,
+        "ranking": bundle.ranking_provider.provider_name,
+        "diagnosis": bundle.diagnosis_provider.provider_name,
+        "watchlist": bundle.watchlist_provider.provider_name,
+    }
+    for provider in instances.values():
+        setattr(provider, "_provider_routes", route_summary)
+    return bundle
 
 
-def _build_raw_provider(settings: Settings) -> MarketDataProvider:
-    if settings.provider == "auto":
+def _build_named_provider(provider_name: str, settings: Settings) -> MarketDataProvider:
+    if provider_name == "auto":
         providers: list[MarketDataProvider] = []
         providers.extend(_build_real_providers(settings))
         if settings.use_mock_when_provider_fails or not providers:
             providers.append(MockMarketDataProvider())
-        return CompositeMarketDataProvider(providers)
+        provider = CompositeMarketDataProvider(providers)
+        return _wrap_provider(provider, settings)
 
-    if settings.provider in {"akshare", "ak"}:
+    if provider_name in {"akshare", "ak"}:
         try:
-            return AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
+            provider = AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
         except Exception:
             if not settings.use_mock_when_provider_fails:
                 raise
-            return MockMarketDataProvider()
+            provider = MockMarketDataProvider()
+        return _wrap_provider(provider, settings)
 
-    if settings.provider in {"sina", "sina-finance"}:
+    if provider_name in {"sina", "sina-finance"}:
         try:
-            return SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
+            provider = SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
         except Exception:
             if not settings.use_mock_when_provider_fails:
                 raise
-            return MockMarketDataProvider()
+            provider = MockMarketDataProvider()
+        return _wrap_provider(provider, settings)
 
-    if settings.provider in {"tushare", "ts"}:
+    if provider_name in {"tushare", "ts"}:
         try:
-            return TushareMarketDataProvider(
+            provider = TushareMarketDataProvider(
                 token=settings.tushare_token,
                 cache_ttl_seconds=max(settings.provider_cache_ttl_seconds, 300),
             )
         except Exception:
             if not settings.use_mock_when_provider_fails:
                 raise
-            return MockMarketDataProvider()
+            provider = MockMarketDataProvider()
+        return _wrap_provider(provider, settings)
 
-    if settings.provider in {"baostock", "bs"}:
+    if provider_name in {"baostock", "bs"}:
         try:
-            return BaostockMarketDataProvider()
+            provider = BaostockMarketDataProvider()
         except Exception:
             if not settings.use_mock_when_provider_fails:
                 raise
-            return MockMarketDataProvider()
+            provider = MockMarketDataProvider()
+        return _wrap_provider(provider, settings)
 
-    return MockMarketDataProvider()
+    return _wrap_provider(MockMarketDataProvider(), settings)
 
 
 def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
@@ -105,6 +142,23 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
         pass
 
     return providers
+
+
+def _wrap_provider(provider: MarketDataProvider, settings: Settings) -> MarketDataProvider:
+    _attach_provider_diagnostics(provider, settings)
+    if not settings.persistent_cache_enabled:
+        return provider
+
+    cache = SqliteMarketCache(settings.persistent_cache_path)
+    wrapped = PersistentCacheMarketDataProvider(
+        provider=provider,
+        cache=cache,
+        quote_ttl_seconds=settings.persistent_quote_ttl_seconds,
+        bar_ttl_seconds=settings.persistent_bar_ttl_seconds,
+        allow_stale_on_error=settings.persistent_cache_allow_stale_on_error,
+    )
+    _attach_provider_diagnostics(wrapped, settings)
+    return wrapped
 
 
 def get_provider_diagnostics(settings: Settings) -> list[dict[str, str | bool]]:

@@ -6,22 +6,34 @@ from ashare_quant.providers.base import MarketDataProvider
 
 
 class MarketService:
-    def __init__(self, provider: MarketDataProvider) -> None:
+    def __init__(
+        self,
+        provider: MarketDataProvider,
+        *,
+        universe_provider: MarketDataProvider | None = None,
+        ranking_provider: MarketDataProvider | None = None,
+        diagnosis_provider: MarketDataProvider | None = None,
+        watchlist_provider: MarketDataProvider | None = None,
+    ) -> None:
         self.provider = provider
+        self.universe_provider = universe_provider or provider
+        self.ranking_provider = ranking_provider or self.universe_provider
+        self.diagnosis_provider = diagnosis_provider or provider
+        self.watchlist_provider = watchlist_provider or self.universe_provider
 
     def get_universe(self, limit: int = 20) -> UniverseResult:
-        items = self.provider.list_universe(limit=limit)
-        meta = self.provider.get_last_call_meta()
+        items = self.universe_provider.list_universe(limit=limit)
+        meta = self.universe_provider.get_last_call_meta()
         return UniverseResult(items=items, meta=meta)
 
     def rank_universe(self, limit: int = 20, strategy: str = "trend") -> RankingsResult:
         strategy_id = normalize_strategy(strategy)
-        universe = self.provider.list_universe(limit=limit)
-        universe_meta = self.provider.get_last_call_meta()
+        universe = self.ranking_provider.list_universe(limit=limit)
+        universe_meta = self.ranking_provider.get_last_call_meta()
         diagnoses: list[StockDiagnosisResult] = []
         for quote in universe:
-            bars = self.provider.get_daily_bars(quote.symbol, lookback=60)
-            bars_meta = self.provider.get_last_call_meta()
+            bars = self.ranking_provider.get_daily_bars(quote.symbol, lookback=60)
+            bars_meta = self.ranking_provider.get_last_call_meta()
             factors = build_factor_set(quote, bars, strategy=strategy_id)
             diagnoses.append(
                 StockDiagnosisResult(
@@ -39,11 +51,31 @@ class MarketService:
         return RankingsResult(items=ordered, universe_meta=universe_meta)
 
     def diagnose_stock(self, symbol: str, strategy: str = "trend") -> StockDiagnosisResult:
+        return self._diagnose_with_provider(
+            self.diagnosis_provider,
+            symbol=symbol,
+            strategy=strategy,
+        )
+
+    def diagnose_watchlist_stock(self, symbol: str, strategy: str = "trend") -> StockDiagnosisResult:
+        return self._diagnose_with_provider(
+            self.watchlist_provider,
+            symbol=symbol,
+            strategy=strategy,
+        )
+
+    def _diagnose_with_provider(
+        self,
+        provider: MarketDataProvider,
+        *,
+        symbol: str,
+        strategy: str,
+    ) -> StockDiagnosisResult:
         strategy_id = normalize_strategy(strategy)
-        quote = self.provider.get_quote(symbol)
-        quote_meta = self.provider.get_last_call_meta()
-        bars = self.provider.get_daily_bars(symbol, lookback=60)
-        bars_meta = self.provider.get_last_call_meta()
+        quote = provider.get_quote(symbol)
+        quote_meta = provider.get_last_call_meta()
+        bars = provider.get_daily_bars(symbol, lookback=60)
+        bars_meta = provider.get_last_call_meta()
         factors = build_factor_set(quote, bars, strategy=strategy_id)
         return StockDiagnosisResult(
             quote=quote,

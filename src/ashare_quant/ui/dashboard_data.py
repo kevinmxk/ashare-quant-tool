@@ -48,7 +48,7 @@ def build_watchlist_rows(service: MarketService, symbols: list[str], strategy: s
     rows: list[dict] = []
     for symbol in symbols:
         try:
-            result = service.diagnose_stock(symbol, strategy=strategy)
+            result = service.diagnose_watchlist_stock(symbol, strategy=strategy)
         except KeyError:
             rows.append(
                 {
@@ -115,6 +115,9 @@ def provider_status(provider: MarketDataProvider, settings: Settings) -> dict:
     payload["active_provider_chain"] = active_provider.provider_name
     if diagnostics is not None:
         payload["provider_diagnostics"] = diagnostics
+    routes = getattr(provider, "_provider_routes", None)
+    if routes is not None:
+        payload["provider_routes"] = routes
     return payload
 
 

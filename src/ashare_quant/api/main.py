@@ -15,12 +15,19 @@ from ashare_quant.api.schemas import (
 )
 from ashare_quant.config import get_settings
 from ashare_quant.cache.provider_cache import PersistentCacheMarketDataProvider
-from ashare_quant.providers.factory import build_provider
+from ashare_quant.providers.factory import build_provider_bundle
 from ashare_quant.services.market_service import MarketService
 
 settings = get_settings()
-provider = build_provider(settings)
-market_service = MarketService(provider)
+bundle = build_provider_bundle(settings)
+provider = bundle.default_provider
+market_service = MarketService(
+    provider,
+    universe_provider=bundle.universe_provider,
+    ranking_provider=bundle.ranking_provider,
+    diagnosis_provider=bundle.diagnosis_provider,
+    watchlist_provider=bundle.watchlist_provider,
+)
 
 app = FastAPI(title=settings.app_name)
 
@@ -28,6 +35,7 @@ app = FastAPI(title=settings.app_name)
 @app.get("/health")
 def health() -> dict:
     diagnostics = getattr(provider, "_provider_diagnostics", None)
+    routes = getattr(provider, "_provider_routes", None)
     response = {
         "status": "ok",
         "configured_provider": settings.provider,
@@ -44,6 +52,8 @@ def health() -> dict:
         response["active_provider_chain"] = provider.provider.provider_name
     if diagnostics is not None:
         response["provider_diagnostics"] = diagnostics
+    if routes is not None:
+        response["provider_routes"] = routes
     return response
 
 

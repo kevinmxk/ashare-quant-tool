@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from ashare_quant.config import get_settings
-from ashare_quant.providers.factory import build_provider
+from ashare_quant.providers.factory import build_provider_bundle
 from ashare_quant.services.market_service import MarketService
 from ashare_quant.ui.dashboard_data import (
     build_rankings_table,
@@ -29,8 +29,15 @@ DEFAULT_WATCHLIST = "600519,300750,000858,002594,688981"
 @st.cache_resource
 def bootstrap() -> tuple:
     settings = get_settings()
-    provider = build_provider(settings)
-    service = MarketService(provider)
+    bundle = build_provider_bundle(settings)
+    provider = bundle.default_provider
+    service = MarketService(
+        provider,
+        universe_provider=bundle.universe_provider,
+        ranking_provider=bundle.ranking_provider,
+        diagnosis_provider=bundle.diagnosis_provider,
+        watchlist_provider=bundle.watchlist_provider,
+    )
     return settings, provider, service
 
 

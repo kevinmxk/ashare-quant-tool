@@ -3,15 +3,22 @@ from __future__ import annotations
 import sys
 
 from ashare_quant.config import get_settings
-from ashare_quant.providers.factory import build_provider
+from ashare_quant.providers.factory import build_provider_bundle
 from ashare_quant.services.market_service import MarketService
 
 
 def main() -> None:
     strategy = sys.argv[1] if len(sys.argv) > 1 else "trend"
     settings = get_settings()
-    provider = build_provider(settings)
-    service = MarketService(provider)
+    bundle = build_provider_bundle(settings)
+    provider = bundle.default_provider
+    service = MarketService(
+        provider,
+        universe_provider=bundle.universe_provider,
+        ranking_provider=bundle.ranking_provider,
+        diagnosis_provider=bundle.diagnosis_provider,
+        watchlist_provider=bundle.watchlist_provider,
+    )
     rankings = service.rank_universe(limit=10, strategy=strategy)
 
     print("A 股量化评分演示 Top 10")

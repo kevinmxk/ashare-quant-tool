@@ -9,6 +9,10 @@ from functools import lru_cache
 class Settings:
     app_name: str = "A-Share Quant Tool"
     provider: str = "auto"
+    universe_provider: str | None = None
+    ranking_provider: str | None = None
+    diagnosis_provider: str | None = None
+    watchlist_provider: str | None = None
     ranking_limit: int = 20
     use_mock_when_provider_fails: bool = True
     provider_cache_ttl_seconds: int = 15
@@ -25,6 +29,10 @@ def get_settings() -> Settings:
     return Settings(
         app_name=os.getenv("ASHARE_QUANT_APP_NAME", "A-Share Quant Tool"),
         provider=os.getenv("ASHARE_QUANT_PROVIDER", "auto").strip().lower(),
+        universe_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_UNIVERSE_PROVIDER")),
+        ranking_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_RANKING_PROVIDER")),
+        diagnosis_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_DIAGNOSIS_PROVIDER")),
+        watchlist_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_WATCHLIST_PROVIDER")),
         ranking_limit=int(os.getenv("ASHARE_QUANT_RANKING_LIMIT", "20")),
         use_mock_when_provider_fails=os.getenv(
             "ASHARE_QUANT_USE_MOCK_WHEN_PROVIDER_FAILS",
@@ -54,3 +62,10 @@ def get_settings() -> Settings:
         ).lower()
         in {"1", "true", "yes", "y"},
     )
+
+
+def _normalize_provider_env(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip().lower()
+    return text or None
