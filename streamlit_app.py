@@ -34,6 +34,21 @@ def bootstrap() -> tuple:
     return settings, provider, service
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def load_rankings(_service: MarketService, limit: int, strategy: str):
+    return _service.rank_universe(limit=limit, strategy=strategy)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_diagnosis(_service: MarketService, symbol: str, strategy: str):
+    return _service.diagnose_stock(symbol, strategy=strategy)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_watchlist_rows(_service: MarketService, symbols: tuple[str, ...], strategy: str):
+    return build_watchlist_rows(_service, list(symbols), strategy)
+
+
 def main() -> None:
     st.set_page_config(
         page_title="A 股量化分析台",
@@ -50,6 +65,11 @@ def main() -> None:
     with st.sidebar:
         st.markdown("## A 股量化分析台")
         st.caption("研究型选股仪表盘")
+        selected_view = st.radio(
+            "查看模块",
+            options=["单股诊断", "策略榜单", "自选池", "系统状态"],
+            index=0,
+        )
         selected_name = st.radio(
             "选择策略",
             options=[item["name"] for item in strategies],
@@ -62,11 +82,11 @@ def main() -> None:
         refresh = st.button("刷新面板", use_container_width=True)
         if refresh:
             st.cache_resource.clear()
+            st.cache_data.clear()
             settings, provider, service = bootstrap()
 
-    rankings = service.rank_universe(limit=ranking_limit, strategy=selected_strategy)
-    summary = summarize_rankings(rankings)
     status = provider_status(provider, settings)
+    _render_provider_banner(status)
 
     st.markdown(
         """
@@ -82,17 +102,15 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("策略", selected_name)
-    metric_cols[1].metric("可执行候选", summary["eligible_count"])
-    metric_cols[2].metric("平均分", summary["avg_score"])
-    metric_cols[3].metric("最高分", summary["top_score"])
-
-    tab_rankings, tab_stock, tab_watchlist, tab_status = st.tabs(
-        ["策略榜单", "单股诊断", "自选池", "系统状态"]
-    )
-
-    with tab_rankings:
+    if selected_view == "策略榜单":
+        with st.spinner("正在加载策略榜单..."):
+            rankings = load_rankings(service, ranking_limit, selected_strategy)
+        summary = summarize_rankings(rankings)
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("策略", selected_name)
+        metric_cols[1].metric("可执行候选", summary["eligible_count"])
+        metric_cols[2].metric("平均分", summary["avg_score"])
+        metric_cols[3].metric("最高分", summary["top_score"])
         st.markdown("### 策略榜单")
         st.caption("同策略下先排通过硬过滤的股票，再按总分排序。")
         st.dataframe(
@@ -103,26 +121,25 @@ def main() -> None:
 
         if rankings.universe_meta is not None:
             _meta_block("榜单数据来源", rankings.universe_meta)
-
-    with tab_stock:
+    elif selected_view == "单股诊断":
         st.markdown("### 单股诊断")
         try:
-            diagnosis = service.diagnose_stock(stock_symbol, strategy=selected_strategy)
+            with st.spinner("正在加载单股诊断..."):
+                diagnosis = load_diagnosis(service, stock_symbol, selected_strategy)
         except KeyError:
             _render_lookup_error(stock_symbol, status)
         else:
             _render_diagnosis(diagnosis_to_dict(diagnosis))
-
-    with tab_watchlist:
+    elif selected_view == "自选池":
         st.markdown("### 自选池观察")
         watchlist = parse_watchlist(watchlist_text)
         if watchlist:
-            rows = build_watchlist_rows(service, watchlist, selected_strategy)
+            with st.spinner("正在加载自选池..."):
+                rows = load_watchlist_rows(service, tuple(watchlist), selected_strategy)
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         else:
             st.info("在左侧输入一组股票代码后，这里会显示自选池诊断结果。")
-
-    with tab_status:
+    else:
         st.markdown("### 系统状态")
         left, right = st.columns([1.15, 1])
         with left:
@@ -232,6 +249,35 @@ def _render_lookup_error(symbol: str, status: dict) -> None:
         """.format(configured=configured_provider, active=active_provider),
         unsafe_allow_html=True,
     )
+
+
+def _render_provider_banner(status: dict) -> None:
+    active_chain = str(status.get("active_provider_chain") or status.get("active_provider") or "")
+    diagnostics = status.get("provider_diagnostics") or []
+    if "mock" not in active_chain.lower():
+        return
+
+    unavailable = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict) and not item.get("enabled")
+    ]
+    if unavailable:
+        reason_lines = "\n".join(
+            "- {provider}: {reason}".format(
+                provider=item.get("provider", "unknown"),
+                reason=item.get("reason", "unknown"),
+            )
+            for item in unavailable
+        )
+        st.warning(
+            "当前正在使用模拟数据源，真实数据源还没有成功启用。\n\n可能原因：\n{reasons}".format(
+                reasons=reason_lines
+            )
+        )
+        return
+
+    st.warning("当前正在使用模拟数据源，单股诊断和自选池只对内置样本股有效。")
 
 
 def _meta_block(title: str, meta: object) -> None:

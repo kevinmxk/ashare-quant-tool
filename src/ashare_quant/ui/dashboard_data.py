@@ -94,12 +94,15 @@ def summarize_rankings(rankings: RankingsResult) -> dict[str, float | int]:
 
 
 def provider_status(provider: MarketDataProvider, settings: Settings) -> dict:
+    diagnostics = getattr(provider, "_provider_diagnostics", None)
+    active_provider = provider
     payload = {
         "configured_provider": settings.provider,
         "active_provider": provider.provider_name,
         "persistent_cache_enabled": settings.persistent_cache_enabled,
     }
     if isinstance(provider, PersistentCacheMarketDataProvider):
+        active_provider = provider.provider
         payload["cache"] = {
             "path": provider.cache.db_path,
             "stats": provider.cache.get_stats(),
@@ -107,6 +110,11 @@ def provider_status(provider: MarketDataProvider, settings: Settings) -> dict:
             "bar_ttl_seconds": provider.bar_ttl_seconds,
             "allow_stale_on_error": provider.allow_stale_on_error,
         }
+        if diagnostics is None:
+            diagnostics = getattr(provider.provider, "_provider_diagnostics", None)
+    payload["active_provider_chain"] = active_provider.provider_name
+    if diagnostics is not None:
+        payload["provider_diagnostics"] = diagnostics
     return payload
 
 

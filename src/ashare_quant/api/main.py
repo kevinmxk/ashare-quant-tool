@@ -27,6 +27,7 @@ app = FastAPI(title=settings.app_name)
 
 @app.get("/health")
 def health() -> dict:
+    diagnostics = getattr(provider, "_provider_diagnostics", None)
     response = {
         "status": "ok",
         "configured_provider": settings.provider,
@@ -38,6 +39,11 @@ def health() -> dict:
             "path": provider.cache.db_path,
             "stats": provider.cache.get_stats(),
         }
+        if diagnostics is None:
+            diagnostics = getattr(provider.provider, "_provider_diagnostics", None)
+        response["active_provider_chain"] = provider.provider.provider_name
+    if diagnostics is not None:
+        response["provider_diagnostics"] = diagnostics
     return response
 
 
