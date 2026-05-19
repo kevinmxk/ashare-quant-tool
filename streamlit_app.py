@@ -106,8 +106,12 @@ def main() -> None:
 
     with tab_stock:
         st.markdown("### 单股诊断")
-        diagnosis = service.diagnose_stock(stock_symbol, strategy=selected_strategy)
-        _render_diagnosis(diagnosis_to_dict(diagnosis))
+        try:
+            diagnosis = service.diagnose_stock(stock_symbol, strategy=selected_strategy)
+        except KeyError:
+            _render_lookup_error(stock_symbol, status)
+        else:
+            _render_diagnosis(diagnosis_to_dict(diagnosis))
 
     with tab_watchlist:
         st.markdown("### 自选池观察")
@@ -198,6 +202,36 @@ def _render_diagnosis(result: dict) -> None:
 
     st.markdown("#### 原始诊断数据")
     st.code(json.dumps(result, ensure_ascii=False, indent=2), language="json")
+
+
+def _render_lookup_error(symbol: str, status: dict) -> None:
+    active_provider = str(status.get("active_provider") or "unknown")
+    configured_provider = str(status.get("configured_provider") or "unknown")
+    is_mock = "mock" in active_provider.lower()
+
+    if is_mock:
+        st.error(
+            "当前环境正在使用模拟数据源，暂时不支持诊断 `{symbol}` 这类未内置的股票代码。".format(
+                symbol=symbol
+            )
+        )
+        st.info(
+            "建议先到“系统状态”页确认数据源，再在部署环境安装并启用真实数据依赖，例如 `AKShare`、`Tushare` 或 `BaoStock`。"
+        )
+    else:
+        st.error("当前数据源里没有找到 `{symbol}`，暂时无法完成单股诊断。".format(symbol=symbol))
+        st.info("你可以先检查股票代码格式，或在“系统状态”页确认当前数据源是否正常。")
+
+    st.markdown(
+        """
+        <div class="meta-card">
+          <div class="meta-title">当前数据源状态</div>
+          <div>配置值：{configured}</div>
+          <div>实际生效：{active}</div>
+        </div>
+        """.format(configured=configured_provider, active=active_provider),
+        unsafe_allow_html=True,
+    )
 
 
 def _meta_block(title: str, meta: object) -> None:

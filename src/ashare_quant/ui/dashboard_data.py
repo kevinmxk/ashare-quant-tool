@@ -47,7 +47,23 @@ def build_rankings_table(rankings: RankingsResult) -> list[dict]:
 def build_watchlist_rows(service: MarketService, symbols: list[str], strategy: str) -> list[dict]:
     rows: list[dict] = []
     for symbol in symbols:
-        result = service.diagnose_stock(symbol, strategy=strategy)
+        try:
+            result = service.diagnose_stock(symbol, strategy=strategy)
+        except KeyError:
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "name": "未找到",
+                    "score": 0.0,
+                    "eligible": "否",
+                    "latest_price": "-",
+                    "pct_change": "-",
+                    "entry_signal": "当前数据源未收录该股票代码",
+                    "failed_filters": "请检查数据源或股票代码格式",
+                }
+            )
+            continue
+
         rows.append(
             {
                 "symbol": result.quote.symbol,
