@@ -1,4 +1,4 @@
-# A 股量化分析工具 V1
+# A股量化分析工具 V1
 
 这是一个面向个人研究场景的 A 股股票数据量化分析工具骨架，目标是帮助完成：
 
@@ -13,24 +13,35 @@
 - 内置 `Mock` 数据源，方便离线开发
 - 已接入 `AKShare`、`Tushare`、`BaoStock` 适配入口
 - 提供基础因子计算与评分逻辑
-- 提供一个简单的 API 服务
+- 提供本地缓存、API 和前端仪表盘骨架
 
 ## 当前目录结构
 
 ```text
 docs/
   AKShare接入与兼容性说明.md
-  本地持久化缓存层设计说明.md
-  多数据源回退设计说明.md
+  GitHub上传说明.md
   V1技术设计书-上半部分.md
+  多数据源回退设计说明.md
+  局域网部署说明.md
+  本地持久化缓存层设计说明.md
+scripts/
+  akshare_parser_check.py
+  cache_smoke_test.py
+  demo_run.py
+  deploy_to_lan.ps1
+  multi_provider_parser_check.py
+  push_to_github.ps1
+  ui_data_smoke_test.py
 src/
   ashare_quant/
     analysis/
     api/
+    cache/
     providers/
     services/
-scripts/
-  demo_run.py
+    ui/
+streamlit_app.py
 ```
 
 ## 快速开始
@@ -47,7 +58,7 @@ pip install -e .
 python scripts/demo_run.py
 ```
 
-3. 运行 `AKShare` 清洗自检
+3. 运行 AKShare 清洗自检
 
 ```bash
 python scripts/akshare_parser_check.py
@@ -92,7 +103,7 @@ uvicorn ashare_quant.api.main:app --reload
 - `GET /stocks/{symbol}?strategy=value`
 - `Streamlit` 仪表盘前端：榜单、自选池、单股诊断、系统状态
 
-当未安装 `akshare` 或未开启真实数据模式时，系统自动回退到内置的模拟数据源，方便先把分析链路跑通。
+当未安装 `akshare` 或未开启真实数据模式时，系统会自动回退到内置模拟数据源，方便先把分析链路跑通。
 
 ## 当前策略
 
@@ -123,4 +134,4 @@ uvicorn ashare_quant.api.main:app --reload
 - 完善真实数据联调与缓存命中观察
 - 完善行业、板块、资金流因子
 - 增加回测模块
-- 增加前端页面
+- 继续增强前端页面
