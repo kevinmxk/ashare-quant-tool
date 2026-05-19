@@ -8,6 +8,7 @@ from ashare_quant.providers.baostock_provider import BaostockMarketDataProvider
 from ashare_quant.providers.base import MarketDataProvider
 from ashare_quant.providers.composite_provider import CompositeMarketDataProvider
 from ashare_quant.providers.mock_provider import MockMarketDataProvider
+from ashare_quant.providers.sina_provider import SinaMarketDataProvider
 from ashare_quant.providers.tushare_provider import TushareMarketDataProvider
 
 
@@ -45,6 +46,14 @@ def _build_raw_provider(settings: Settings) -> MarketDataProvider:
                 raise
             return MockMarketDataProvider()
 
+    if settings.provider in {"sina", "sina-finance"}:
+        try:
+            return SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
+        except Exception:
+            if not settings.use_mock_when_provider_fails:
+                raise
+            return MockMarketDataProvider()
+
     if settings.provider in {"tushare", "ts"}:
         try:
             return TushareMarketDataProvider(
@@ -76,6 +85,11 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
         pass
 
     try:
+        providers.append(SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds))
+    except Exception:
+        pass
+
+    try:
         providers.append(
             TushareMarketDataProvider(
                 token=settings.tushare_token,
@@ -96,6 +110,7 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
 def get_provider_diagnostics(settings: Settings) -> list[dict[str, str | bool]]:
     checks: list[dict[str, str | bool]] = []
     checks.append(_check_provider("akshare", _build_akshare, settings))
+    checks.append(_check_provider("sina", _build_sina, settings))
     checks.append(_check_provider("tushare", _build_tushare, settings))
     checks.append(_check_provider("baostock", _build_baostock, settings))
     return checks
@@ -137,6 +152,10 @@ def _build_tushare(settings: Settings) -> MarketDataProvider:
         token=settings.tushare_token,
         cache_ttl_seconds=max(settings.provider_cache_ttl_seconds, 300),
     )
+
+
+def _build_sina(settings: Settings) -> MarketDataProvider:
+    return SinaMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
 
 
 def _build_baostock(settings: Settings) -> MarketDataProvider:

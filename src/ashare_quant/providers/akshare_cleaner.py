@@ -11,17 +11,17 @@ from ashare_quant.providers.shared_cleaner import (
 )
 
 QUOTE_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
-    "symbol": ("代码", "股票代码", "证券代码"),
-    "name": ("名称", "股票简称", "证券简称"),
-    "latest_price": ("最新价", "最新", "收盘"),
-    "pct_change": ("涨跌幅", "涨幅"),
-    "turnover_rate": ("换手率", "换手"),
-    "amount": ("成交额", "金额"),
-    "volume_ratio": ("量比",),
-    "pe_ttm": ("市盈率-动态", "动态市盈率"),
-    "pb": ("市净率",),
-    "market_cap": ("总市值",),
-    "sector": ("所属行业", "行业"),
+    "symbol": ("代码", "股票代码", "证券代码", "symbol", "code"),
+    "name": ("名称", "股票简称", "证券简称", "name"),
+    "latest_price": ("最新价", "最新", "收盘", "trade", "price"),
+    "pct_change": ("涨跌幅", "涨幅", "changepercent", "pct_change"),
+    "turnover_rate": ("换手率", "换手", "turnoverratio", "turnover_rate"),
+    "amount": ("成交额", "金额", "amount"),
+    "volume_ratio": ("量比", "volume_ratio"),
+    "pe_ttm": ("市盈率-动态", "动态市盈率", "pe_ttm", "per"),
+    "pb": ("市净率", "pb"),
+    "market_cap": ("总市值", "market_cap", "mktcap"),
+    "sector": ("所属行业", "行业", "sector", "industry"),
 }
 
 BAR_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {

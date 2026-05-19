@@ -50,6 +50,12 @@ def to_baostock_code(symbol: str) -> str:
     return "{exchange}.{code}".format(exchange=exchange, code=code)
 
 
+def to_sina_symbol(symbol: str) -> str:
+    code = normalize_symbol(symbol)
+    exchange = detect_exchange(code).lower()
+    return "{exchange}{code}".format(exchange=exchange, code=code)
+
+
 def safe_float(value: Any, default: float | None = None) -> float | None:
     if value in (None, "", "-", "--"):
         return default

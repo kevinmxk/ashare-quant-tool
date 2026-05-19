@@ -122,8 +122,9 @@ uvicorn ashare_quant.api.main:app --reload
 ## 兼容性说明
 
 - 默认 `provider=auto`
-- `auto` 模式会依次尝试 `AKShare -> Tushare -> BaoStock -> Mock`
+- `auto` 模式会依次尝试 `AKShare -> Sina -> Tushare -> BaoStock -> Mock`
 - 当前机器缺少依赖时自动回退到 `Mock`
+- 也支持显式选择 `provider=sina`，适合补充新浪财经的实时行情与日线接口
 - 股票代码支持 `000001`、`sz000001`、`SH600519` 等常见格式
 - `AKShare` 列名清洗统一收敛在 `src/ashare_quant/providers/akshare_cleaner.py`
 - 跨数据源的代码格式和日期处理统一收敛在 `src/ashare_quant/providers/shared_cleaner.py`
