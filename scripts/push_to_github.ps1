@@ -3,6 +3,7 @@ param(
     [string]$Branch = "main",
     [string]$CommitMessage = "Initial project upload",
     [switch]$SkipCommit,
+    [switch]$SyncRemoteHistory,
     [switch]$VerboseGit
 )
 
@@ -75,8 +76,22 @@ if (-not $SkipCommit) {
     }
 }
 
+if ($SyncRemoteHistory) {
+    Write-Host "Syncing remote history from origin/$Branch..." -ForegroundColor Yellow
+    Write-Host "If the remote repository already has an initial commit, this step will merge it locally first." -ForegroundColor DarkYellow
+    Invoke-Git -Args @("pull", "origin", $Branch, "--allow-unrelated-histories", "--no-rebase")
+}
+
 Write-Host "Pushing branch $Branch to origin..." -ForegroundColor Yellow
-Invoke-Git -Args @("push", "-u", "origin", $Branch)
+try {
+    Invoke-Git -Args @("push", "-u", "origin", $Branch)
+} catch {
+    Write-Host ""
+    Write-Host "Push failed." -ForegroundColor Red
+    Write-Host "If the remote repository already has a README or another initial commit, run this script again with -SyncRemoteHistory." -ForegroundColor Yellow
+    Write-Host "Example:" -ForegroundColor Yellow
+    Write-Host "powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -CommitMessage `"$CommitMessage`" -SyncRemoteHistory" -ForegroundColor Cyan
+    throw
+}
 
 Write-Host "Push completed." -ForegroundColor Green
-

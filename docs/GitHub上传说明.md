@@ -55,6 +55,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -SkipCommi
 powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -VerboseGit
 ```
 
+## 如果远端仓库已经有初始 README 或其他提交
+
+如果你看到这种报错：
+
+- `main -> main (fetch first)`
+- `Updates were rejected because the remote contains work that you do not have locally`
+
+说明远端不是空仓库，通常是你在 GitHub 上创建仓库时自动带了一个 `README.md`。
+
+这时不要强推，直接运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -CommitMessage "Upload initial A-share quant analysis tool" -SyncRemoteHistory
+```
+
+这个参数会先把远端 `main` 的历史合并到本地，再继续推送。
+
+如果合并时提示冲突，最常见的是 `README.md`。这时先解决冲突，再重新执行推送即可。
+
 ## 脚本会做什么
 
 1. 如果当前目录还不是 git 仓库，会自动初始化
@@ -62,7 +81,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -VerboseGi
 3. 检查 `origin` 远端，没有就自动添加
 4. 执行 `git add .`
 5. 如果有变更则自动提交
-6. 执行 `git push -u origin main`
+6. 如果你传了 `-SyncRemoteHistory`，会先同步远端历史
+7. 执行 `git push -u origin main`
 
 ## 可能遇到的问题
 
@@ -80,7 +100,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -VerboseGi
 
 如果远端仓库不是空仓库，可能会出现推送被拒绝。
 
-这时先不要强推，先告诉我报错内容，我再帮你处理。
+优先使用上面的 `-SyncRemoteHistory` 参数处理，不要直接强推。
 
 ### 3. 分支不是 `main`
 
@@ -92,11 +112,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -Branch de
 
 ## 建议的本次操作
 
-你现在可以直接在项目目录执行：
+你刚刚已经遇到 `fetch first` 报错，这次请直接执行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -CommitMessage "Upload initial A-share quant analysis tool"
+powershell -ExecutionPolicy Bypass -File .\scripts\push_to_github.ps1 -CommitMessage "Upload initial A-share quant analysis tool" -SyncRemoteHistory
 ```
 
-如果你跑完后把报错或成功输出发给我，我可以继续帮你确认仓库状态，或者处理后续分支、README、发布说明这些事情。
-
+如果你跑完后把输出发给我，我可以继续帮你确认仓库状态，或者处理冲突、README、分支这些后续事情。
