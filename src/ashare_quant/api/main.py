@@ -20,13 +20,19 @@ from ashare_quant.api.schemas import (
     StatusResponse,
     StrategyResponse,
     SummaryResponse,
+    WatchlistAddRequest,
+    WatchlistAddResponse,
+    WatchlistListResponse,
     WatchlistRequest,
+    WatchlistRemoveResponse,
     WatchlistResponse,
     WatchlistRow,
 )
+from ashare_quant.cache.sqlite_cache import SqliteMarketCache
 from ashare_quant.config import get_settings
 from ashare_quant.cache.provider_cache import PersistentCacheMarketDataProvider
 from ashare_quant.providers.factory import build_provider_bundle, get_provider_diagnostics
+from ashare_quant.providers.shared_cleaner import normalize_symbol
 from ashare_quant.services.market_service import MarketService
 from ashare_quant.ui.dashboard_data import (
     bars_to_chart_data,
@@ -53,6 +59,11 @@ market_service = MarketService(
 )
 
 cache = APIMemoryCache(ttl_seconds=settings.provider_cache_ttl_seconds)
+watchlist_cache = (
+    provider.cache
+    if isinstance(provider, PersistentCacheMarketDataProvider)
+    else SqliteMarketCache(settings.persistent_cache_path)
+)
 
 app = FastAPI(title=settings.app_name)
 
@@ -179,6 +190,29 @@ def watchlist(request: WatchlistRequest) -> WatchlistResponse:
     return response
 
 
+@app.get("/api/watchlist/list")
+def watchlist_list() -> WatchlistListResponse:
+    return WatchlistListResponse(symbols=watchlist_cache.list_watchlist_symbols())
+
+
+@app.post("/api/watchlist/add")
+def watchlist_add(request: WatchlistAddRequest) -> WatchlistAddResponse:
+    symbol = _normalize_watchlist_symbol(request.symbol)
+    watchlist_cache.add_watchlist_symbol(symbol, note=request.note)
+    rows = build_watchlist_rows(market_service, [symbol], request.strategy)
+    row = rows[0] if rows else _fallback_watchlist_row(symbol)
+    response = WatchlistAddResponse(symbol=symbol, row=WatchlistRow(**row))
+    cache.set(f"watchlist:{symbol}:{request.strategy}", WatchlistResponse(rows=[response.row]))
+    return response
+
+
+@app.delete("/api/watchlist/remove/{symbol}")
+def watchlist_remove(symbol: str) -> WatchlistRemoveResponse:
+    normalized = _normalize_watchlist_symbol(symbol)
+    removed = watchlist_cache.remove_watchlist_symbol(normalized)
+    return WatchlistRemoveResponse(symbol=normalized, removed=removed)
+
+
 @app.get("/api/status")
 def status() -> StatusResponse:
     cached = cache.get("status")
@@ -237,3 +271,23 @@ def _dict_to_diagnosis_response(data: dict) -> DiagnosisResponse:
         quote_meta=_to_meta_response(quote_meta) if quote_meta else None,
         bars_meta=_to_meta_response(bars_meta) if bars_meta else None,
     )
+
+
+def _normalize_watchlist_symbol(symbol: str) -> str:
+    normalized = normalize_symbol(symbol)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    return normalized
+
+
+def _fallback_watchlist_row(symbol: str) -> dict:
+    return {
+        "symbol": symbol,
+        "name": "未找到",
+        "score": 0.0,
+        "eligible": "否",
+        "latest_price": "-",
+        "pct_change": "-",
+        "entry_signal": "当前诊断请求失败，已跳过该股票",
+        "failed_filters": "-",
+    }

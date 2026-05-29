@@ -100,6 +100,12 @@ class WatchlistRequest(BaseModel):
     strategy: str = "trend"
 
 
+class WatchlistAddRequest(BaseModel):
+    symbol: str
+    note: str | None = None
+    strategy: str = "trend"
+
+
 class WatchlistRow(BaseModel):
     symbol: str
     name: str
@@ -113,6 +119,20 @@ class WatchlistRow(BaseModel):
 
 class WatchlistResponse(BaseModel):
     rows: list[WatchlistRow]
+
+
+class WatchlistListResponse(BaseModel):
+    symbols: list[str]
+
+
+class WatchlistAddResponse(BaseModel):
+    symbol: str
+    row: WatchlistRow
+
+
+class WatchlistRemoveResponse(BaseModel):
+    symbol: str
+    removed: bool
 
 
 class BarDataPoint(BaseModel):

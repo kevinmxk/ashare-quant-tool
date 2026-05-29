@@ -2,12 +2,8 @@
 title A-Quant Tool
 chcp 936 >nul
 
-echo ========================================
-echo   A-Share Quant Tool Launcher
-echo ========================================
-echo.
-
 set PROJECT_DIR=C:\Users\soap\.openclaw\workspace\ashare-quant-tool
+set API_PORT=8004
 
 if not exist "%PROJECT_DIR%\frontend\node_modules" (
     echo [Frontend] Installing dependencies...
@@ -21,8 +17,8 @@ if not exist "%PROJECT_DIR%\frontend\node_modules" (
     cd /d "%PROJECT_DIR%"
 )
 
-echo [Backend] Starting FastAPI on port 8000...
-start "A-Quant-API" cmd /k "cd /d "%PROJECT_DIR%" && uvicorn src.ashare_quant.api.main:app --reload --port 8000"
+echo [Backend] Starting FastAPI on port %API_PORT%...
+start "A-Quant-API" cmd /k "cd /d "%PROJECT_DIR%" && uvicorn src.ashare_quant.api.main:app --port %API_PORT%"
 
 echo [Frontend] Starting Vue on port 5173...
 start "A-Quant-Frontend" cmd /k "cd /d "%PROJECT_DIR%\frontend" && npm run dev"
@@ -30,7 +26,7 @@ start "A-Quant-Frontend" cmd /k "cd /d "%PROJECT_DIR%\frontend" && npm run dev"
 echo.
 echo ========================================
 echo   Started!
-echo   API:  http://localhost:8000
+echo   API:  http://localhost:%API_PORT%
 echo   Web:  http://localhost:5173
 echo ========================================
 

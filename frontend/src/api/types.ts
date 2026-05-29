@@ -85,14 +85,28 @@ export interface WatchlistRow {
   name: string
   score: number
   eligible: string
-  latest_price: string
-  pct_change: string
+  latest_price: string | number
+  pct_change: string | number
   entry_signal: string
   failed_filters: string
 }
 
 export interface WatchlistResponse {
   rows: WatchlistRow[]
+}
+
+export interface WatchlistListResponse {
+  symbols: string[]
+}
+
+export interface WatchlistAddResponse {
+  symbol: string
+  row: WatchlistRow
+}
+
+export interface WatchlistRemoveResponse {
+  symbol: string
+  removed: boolean
 }
 
 export interface BarDataPoint {
