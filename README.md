@@ -1,187 +1,198 @@
-# A股量化分析工具 V2
+# A股量化分析工具 V2（前后端分离）
 
-一个面向个人研究场景的 A 股股票数据量化分析工具，采用**双数据源智能路由**架构，兼顾速度与准确性。
+一个面向个人研究场景的 A 股股票数据量化分析工具，采用**双数据源智能路由**架构，兼顾速度与准确性。支持 **FastAPI + Vue 3 前后端分离** 和 **Streamlit 一体化** 两种模式。
+
+---
+
+## 技术栈
+
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| **前端** | Vue 3 + TypeScript + Vite | Composition API，响应式布局 |
+| **UI 框架** | Tailwind CSS v4 | 深色金融风格（TradingView 配色） |
+| **图表** | ECharts | K 线图 + 成交量 + MA20 |
+| **后端** | FastAPI + uvicorn | RESTful API，端口 8000 |
+| **数据采集** | EastMoney HTTP + BaoStock SDK | 双源智能路由 |
+| **缓存** | SQLite（持久）+ 内存 TTL | 冷热缓存分离，后台刷新 |
+| **备选前端** | Streamlit | 纯 Python 一体化方案（保留） |
+
+---
 
 ## 核心特性
 
+### 数据源
 - **双源并用**：实时行情走 EastMoney 直调（0.07s），历史日线走 BaoStock（数据准、带复权）
-- **智能路由**：实时类数据（行情快照/榜单）→ EastMoney HTTP，历史类数据（K线/因子计算）→ BaoStock，失败时自动回退
-- **冷热缓存分离**：Streamlit 内存缓存（30s 快速响应）+ SQLite 持久缓存（快照 15min / 日线 12h）
-- **冷缓存后台刷新**：首次加载先用 EastMoney 快速渲染，后台静默用 BaoStock 精准刷新并落盘
-- **并发加载**：自选池/榜单使用多线程并发拉取，冷缓存 5 只自选股 < 0.4s
-- **多源回退**：`EastMoney → Sina → AKShare → BaoStock → Mock` 逐级降级，一个挂了自动切下一个
-- **美观前端**：深色金融风格（TradingView 配色），Plotly K线图，卡片化布局
+- **智能路由**：实时类数据 → EastMoney HTTP，历史类数据 → BaoStock，失败时自动回退
+- **多源回退链**：`EastMoney → Sina → AKShare → BaoStock → Mock`
+- **失败冷却**：坏源短时间自动跳过，不反复重试
 
-## 当前目录结构
+### 性能
+- **冷缓存自选池 5 只**：< 0.4s（首次加载即快速渲染）
+- **冷缓存榜单 20 只**：< 0.7s
+- **后台静默刷新**：首屏 EastMoney 快速渲染，后台 BaoStock 精准刷新并写入 SQLite
+- **SQLite WAL 模式**：支持并发读写不锁表
+
+### 缓存策略
+| 缓存层 | 有效期 | 说明 |
+|--------|--------|------|
+| API 内存缓存 | 30s~120s | FastAPI 层，替代 Streamlit cache_data |
+| SQLite 行情快照 | 15min | 持久化到磁盘 |
+| SQLite 日线数据 | 12h | 持久化到磁盘 |
+| Provider 内存缓存 | 5min | BaoStock 进程内缓存 |
+
+> **SQLite 缓存持久在磁盘**，重启后缓存仍在，没过期就不调 API。
+
+---
+
+## 项目结构
 
 ```text
 .
-├── .env                          # 配置文件（数据源路由、Token、缓存TTL）
-├── streamlit_app.py              # Streamlit 前端（深色金融风格）
-├── scripts/
-│   ├── demo_run.py               # 演示脚本
-│   ├── cache_smoke_test.py       # 缓存测试
-│   ├── ui_data_smoke_test.py     # 前端数据烟雾测试
-│   └── ...
-├── src/ashare_quant/
-│   ├── config.py                 # 配置管理（自动加载 .env）
-│   ├── models.py                 # 数据模型（QuoteSnapshot, FactorSet, DailyBar 等）
-│   ├── cache/
-│   │   ├── sqlite_cache.py       # SQLite 持久缓存（WAL 模式，支持并发读写）
-│   │   └── provider_cache.py     # 缓存 Provider 封装（过期缓存先返回 + 后台刷新）
-│   ├── providers/
-│   │   ├── base.py               # MarketDataProvider 接口定义
-│   │   ├── eastmoney_provider.py # 🆕 东方财富直调（HTTP，0.07s，不依赖 AKShare）
-│   │   ├── baostock_provider.py  # 🆕 BaoStock 数据源（日线精准，带 RLock 并发保护）
-│   │   ├── routing_provider.py   # 🆕 双数据源路由（get_quote→东财，get_daily_bars→BaoStock）
-│   │   ├── sina_provider.py      # 新浪财经（通过 AKShare）
-│   │   ├── akshare_provider.py   # AKShare 数据源
-│   │   ├── tushare_provider.py   # Tushare 数据源
-│   │   ├── mock_provider.py      # 模拟数据（离线兜底）
-│   │   ├── composite_provider.py # 多源组合/失败冷却
-│   │   └── factory.py            # Provider 工厂（dual 模式路由控制）
+├── .env                          # 配置文件
+├── frontend/                     # Vue 3 前端
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── client.ts         # Axios 实例
+│   │   │   └── types.ts          # TypeScript 类型
+│   │   ├── components/
+│   │   │   ├── AppSidebar.vue    # 侧边栏导航
+│   │   │   ├── KlineChart.vue    # ECharts K线图
+│   │   │   ├── MetricCard.vue    # 指标卡片
+│   │   │   ├── LoadingSpinner.vue
+│   │   │   └── ErrorAlert.vue
+│   │   ├── views/
+│   │   │   ├── DiagnosisView.vue # 个股诊断
+│   │   │   ├── RankingsView.vue  # 策略榜单
+│   │   │   ├── WatchlistView.vue # 自选池
+│   │   │   └── StatusView.vue    # 系统状态
+│   │   ├── router/index.ts
+│   │   ├── App.vue
+│   │   └── main.ts
+│   ├── vite.config.ts            # Vite 配置（代理 /api → 8000）
+│   └── package.json
+├── src/ashare_quant/             # Python 核心
+│   ├── api/                      # FastAPI 后端
+│   │   ├── main.py               # API 路由
+│   │   ├── schemas.py            # Pydantic Schema
+│   │   └── cache.py              # 内存缓存
+│   ├── providers/                # 数据源
+│   │   ├── eastmoney_provider.py # 东方财富直调（HTTP 0.07s）
+│   │   ├── baostock_provider.py  # BaoStock 日线
+│   │   ├── routing_provider.py   # 双源路由
+│   │   ├── sina_provider.py      # 新浪财经
+│   │   ├── akshare_provider.py   # AKShare
+│   │   ├── tushare_provider.py   # Tushare
+│   │   ├── mock_provider.py      # 模拟数据
+│   │   ├── composite_provider.py # 多源组合
+│   │   └── factory.py            # Provider 工厂
 │   ├── services/
-│   │   └── market_service.py     # 核心业务层（并发榜单、自选池诊断）
+│   │   └── market_service.py     # 核心业务
+│   ├── cache/
+│   │   ├── sqlite_cache.py       # SQLite 持久缓存
+│   │   └── provider_cache.py     # 缓存 Provider
 │   ├── ui/
-│   │   └── dashboard_data.py     # UI 数据转换（并发自选池加载）
+│   │   └── dashboard_data.py     # UI 数据转换
 │   └── analysis/
-│       └── scoring.py            # 因子计算与评分
-└── data/cache/
-    └── market_cache.sqlite3      # SQLite 持久缓存文件
+│       └── scoring.py            # 因子评分
+├── data/cache/
+│   └── market_cache.sqlite3      # 缓存文件
+├── streamlit_app.py              # Streamlit 备选前端
+├── start_quant_tool.bat          # 一键启动脚本
+└── README.md
 ```
+
+---
 
 ## 快速开始
 
-### 1. 安装依赖
+### 方式 1：Vue 前端（推荐）
 
+**终端 1 — 后端**
 ```bash
-pip install -e .
-# 建议额外安装：
-pip install plotly streamlit  # 前端 + K线图
+cd C:\Users\soap\.openclaw\workspace\ashare-quant-tool
+uvicorn src.ashare_quant.api.main:app --reload --port 8000
 ```
 
-### 2. 配置数据源
-
-复制 `.env.example` 为 `.env`，根据需要修改：
-
-```ini
-# 数据源模式：dual = 双源路由（推荐），auto = 自动回退
-ASHARE_QUANT_PROVIDER=dual
-
-# 个股诊断数据源（建议用 baostock，无需 Token）
-ASHARE_QUANT_DIAGNOSIS_PROVIDER=dual
-
-# 设置缓存 TTL（秒），默认 120s
-ASHARE_QUANT_PROVIDER_CACHE_TTL_SECONDS=120
-
-# Tushare Token（如需要）
-# ASHARE_QUANT_TUSHARE_TOKEN=your_token_here
+**终端 2 — 前端**
+```bash
+cd C:\Users\soap\.openclaw\workspace\ashare-quant-tool\frontend
+npm install   # 仅首次
+npm run dev
 ```
 
-### 3. 启动前端
+浏览器打开 **http://localhost:5173**
 
+### 方式 2：Streamlit（备选）
 ```bash
+cd C:\Users\soap\.openclaw\workspace\ashare-quant-tool
 streamlit run streamlit_app.py
 ```
 
-浏览器访问 `http://localhost:8501`
+浏览器打开 **http://localhost:8501**
 
-### 4. 运行测试
+### 方式 3：一键启动（Windows）
+双击 `start_quant_tool.bat`，自动启动后端 + 前端 + 打开浏览器。
 
-```bash
-python scripts/ui_data_smoke_test.py     # 数据链路测试
-python -m unittest discover -s tests     # 单元测试
-```
+---
 
-## 数据源架构
+## 后端 API
 
-### 当前路由策略（dual 模式）
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/strategies` | GET | 策略列表 |
+| `/api/rankings?limit=20&strategy=trend` | GET | 策略榜单 |
+| `/api/stocks/{symbol}?strategy=trend` | GET | 个股诊断 |
+| `/api/watchlist` | POST | 自选池批量诊断 |
+| `/api/stocks/{symbol}/bars?lookback=60` | GET | 历史日线 |
+| `/api/status` | GET | 系统状态 |
 
-```
-实时（get_quote / list_universe）
-  → EastMoney (HTTP 0.07s) → Sina → AKShare → Mock
+---
 
-历史（get_daily_bars / K 线）
-  → BaoStock (0.5s, 数据准) → EastMoney → Sina → AKShare → Mock
-```
-
-### 可用数据源对比
-
-| 数据源 | 速度 | 实时性 | 数据质量 | 用途 |
-|--------|------|--------|---------|------|
-| **EastMoney 直调** | **0.07s** ⚡ | 准实时 | 标准 | 实时行情、榜单、快照 |
-| **BaoStock** | 0.5s | 盘后（T+1） | ⭐⭐⭐⭐⭐ 交易所级 | 历史日线、K线图、因子计算 |
-| **Sina/AKShare** | 0.1~1s | 准实时 | ⭐⭐⭐ | 降级回退 |
-| **Mock** | 即时 | — | 模拟数据 | 离线开发兜底 |
-
-### 缓存策略
-
-| 缓存层 | 有效期 | 说明 |
-|--------|--------|------|
-| Streamlit `@st.cache_data` | 30s | 内存级，同一用户会话内避免重复调用 |
-| SQLite 行情快照 | 15min | 持久化到磁盘 |
-| SQLite 日线数据 | 12h | 持久化到磁盘 |
-| Provider 内存日线缓存 | 5min | BaoStock 进程内缓存 |
-| **后台刷新** | — | 缓存过期时先返回旧数据，后台静默拉取新数据 |
-
-> **SQLite 缓存持久在磁盘**，重启电脑后缓存仍在，没过期就不调 API。
-
-## 前端功能
-
-- **个股诊断**：搜索股票 → 总分/当前价/涨跌幅/可执行 + 入场退出信号 + 5 因子详情 + Plotly K线图
-- **策略榜单**：选策略 → 统计概览 + 排名表格（代码/名称/总分/涨跌幅/板块）
-- **自选池**：输入代码（逗号分隔）→ 多只股票并发对比诊断
-- **系统状态**：数据源路由、Provider 健康检查、缓存统计
-
-## 可用策略
+## 策略说明
 
 | 策略 | 说明 |
 |------|------|
-| `trend` | 趋势突破，偏强势股跟随 |
-| `pullback` | 回调低吸，偏强趋势中的回撤观察 |
-| `value` | 价值稳健，偏低估值和低波动筛选 |
+| `trend` | 趋势突破，强势股跟随 |
+| `pullback` | 回调低吸，强趋势回撤观察 |
+| `value` | 价值稳健，低估值低波动 |
 
-每套策略输出：
-- `total_score`：总分（0~100）
-- `eligible`：是否通过硬过滤
-- `entry_signal` / `exit_signal`：入场/退出信号
-- `failed_filters` / `risk_flags`：未通过项和风险提示
+每只股票输出：`total_score`（0~100）、`eligible`、`entry_signal`、`exit_signal`、`failed_filters`、`risk_flags`
 
-## 配置说明
+---
 
-环境变量全部通过 `.env` 文件配置，参见 `.env.example`：
+## 配置
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `ASHARE_QUANT_PROVIDER` | `dual` | 数据源模式：dual / auto / mock |
-| `ASHARE_QUANT_RANKING_LIMIT` | `20` | 榜单默认数量 |
-| `ASHARE_QUANT_PROVIDER_CACHE_TTL_SECONDS` | `120` | Provider 缓存 TTL |
-| `ASHARE_QUANT_USE_MOCK_WHEN_PROVIDER_FAILS` | `true` | 失败时自动 Mock 兜底 |
-| `ASHARE_QUANT_PERSISTENT_CACHE_ENABLED` | `true` | 启用 SQLite 持久缓存 |
-| `ASHARE_QUANT_PERSISTENT_QUOTE_TTL_SECONDS` | `900` | 快照缓存有效期（秒） |
-| `ASHARE_QUANT_PERSISTENT_BAR_TTL_SECONDS` | `43200` | 日线缓存有效期（秒） |
-| `ASHARE_QUANT_TUSHARE_TOKEN` | — | Tushare Token（如需） |
+`.env` 文件配置：
 
-## 兼容性
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `ASHARE_QUANT_PROVIDER` | `dual` | 数据源模式（dual / auto / mock） |
+| `ASHARE_QUANT_PROVIDER_CACHE_TTL_SECONDS` | `120` | 缓存 TTL |
+| `ASHARE_QUANT_PERSISTENT_CACHE_ENABLED` | `true` | SQLite 持久缓存 |
+| `ASHARE_QUANT_TUSHARE_TOKEN` | — | Tushare Token（可选） |
 
-- 股票代码支持 `000001`、`sz000001`、`SH600519`、`600519` 等常见格式
-- 跨数据源代码/日期清洗统一收敛在 `shared_cleaner.py`
-- AKShare 列名清洗收敛在 `akshare_cleaner.py`
+---
 
-## V1 → V2 主要更新
+## V1 → V2 更新日志
 
-- 🆕 新增 EastMoney 直调 Provider（HTTP 直连，不依赖 AKShare，0.07s）
-- 🆕 新增 OperationRouting 双源路由（实时→东财，历史→BaoStock）
-- 🆕 自选池/榜单并发加载（8 线程并行，0.4s 内返回）
-- 🆕 冷缓存后台刷新（首屏 EastMoney 快速渲染，后台 BaoStock 精准刷新）
-- 🆕 SQLite WAL 模式（并发读写不锁表）
-- 🆕 Provider 失败冷却（坏源短时间自动跳过）
-- 🆕 BaoStock 线程锁 + 内存缓存（防止并发卡死）
-- 🆕 深色金融风格前端（TradingView 配色，Plotly K 线图）
-- 🆕 北交所 920 号段识别
+### v2.0（2026-05-29）前后端分离重构
+- 🆕 新增 Vue 3 + Vite 前端（Tailwind CSS + ECharts）
+- 🆕 新增 FastAPI 后端（RESTful API + 内存缓存）
+- 🆕 修复个股诊断后端 `asdict` 500 错误
+- 🆕 修复 Windows 下 localhost 代理解析问题
+- 🆕 新增 `start_quant_tool.bat` 一键启动脚本
+- ✅ Streamlit 备选前端保留不变
 
-## 下一步计划
+### v1.5 性能优化
+- 🆕 新增 EastMoney 直调 Provider（0.07s）
+- 🆕 新增 OperationRouting 双源路由
+- 🆕 自选池/榜单并发加载（0.4s 内返回）
+- 🆕 冷缓存后台刷新机制
+- 🆕 SQLite WAL 模式支持并发读写
+- 🆕 Provider 失败冷却机制
 
-- 增加行业/板块/资金流因子
-- 增加回测模块
-- 增加更多技术指标可视化
+### v1.0 初始版本
+- Streamlit 仪表盘
+- AKShare / Sina / Tushare / BaoStock 多源支持
+- SQLite 持久缓存
+- 基础因子评分策略
