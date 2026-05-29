@@ -83,6 +83,13 @@ class StockDiagnosisResult:
 
 
 @dataclass
+class StockBarsResult:
+    symbol: str
+    bars: list[DailyBar]
+    bars_meta: ProviderCallMeta | None = None
+
+
+@dataclass
 class RankingsResult:
     items: list[StockDiagnosisResult]
     universe_meta: ProviderCallMeta | None = None

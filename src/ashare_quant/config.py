@@ -3,19 +3,20 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "A-Share Quant Tool"
-    provider: str = "auto"
+    provider: str = "dual"
     universe_provider: str | None = None
     ranking_provider: str | None = None
     diagnosis_provider: str | None = None
     watchlist_provider: str | None = None
     ranking_limit: int = 20
     use_mock_when_provider_fails: bool = True
-    provider_cache_ttl_seconds: int = 15
+    provider_cache_ttl_seconds: int = 120
     tushare_token: str | None = None
     persistent_cache_enabled: bool = True
     persistent_cache_path: str = "data/cache/market_cache.sqlite3"
@@ -26,9 +27,10 @@ class Settings:
 
 @lru_cache
 def get_settings() -> Settings:
+    _load_dotenv_if_present()
     return Settings(
         app_name=os.getenv("ASHARE_QUANT_APP_NAME", "A-Share Quant Tool"),
-        provider=os.getenv("ASHARE_QUANT_PROVIDER", "auto").strip().lower(),
+        provider=os.getenv("ASHARE_QUANT_PROVIDER", "dual").strip().lower(),
         universe_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_UNIVERSE_PROVIDER")),
         ranking_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_RANKING_PROVIDER")),
         diagnosis_provider=_normalize_provider_env(os.getenv("ASHARE_QUANT_DIAGNOSIS_PROVIDER")),
@@ -39,7 +41,7 @@ def get_settings() -> Settings:
             "true",
         ).lower()
         in {"1", "true", "yes", "y"},
-        provider_cache_ttl_seconds=int(os.getenv("ASHARE_QUANT_PROVIDER_CACHE_TTL_SECONDS", "15")),
+        provider_cache_ttl_seconds=int(os.getenv("ASHARE_QUANT_PROVIDER_CACHE_TTL_SECONDS", "120")),
         tushare_token=os.getenv("ASHARE_QUANT_TUSHARE_TOKEN") or os.getenv("TUSHARE_TOKEN"),
         persistent_cache_enabled=os.getenv(
             "ASHARE_QUANT_PERSISTENT_CACHE_ENABLED",
@@ -69,3 +71,18 @@ def _normalize_provider_env(value: str | None) -> str | None:
         return None
     text = value.strip().lower()
     return text or None
+
+
+def _load_dotenv_if_present() -> None:
+    env_path = Path.cwd() / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        os.environ.setdefault(key, value.strip().strip('"').strip("'"))

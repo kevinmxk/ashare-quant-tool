@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import atexit
 from datetime import date, timedelta
+import time
+from threading import RLock
 from typing import Any
 
 from ashare_quant.models import DailyBar, QuoteSnapshot
@@ -29,7 +31,9 @@ class BaostockMarketDataProvider(MarketDataProvider):
         if str(login_result.error_code) != "0":
             raise RuntimeError("BaoStock login failed: {msg}".format(msg=login_result.error_msg))
         atexit.register(self._safe_logout)
+        self._lock = RLock()
         self._universe_cache: list[dict[str, Any]] = []
+        self._history_cache: dict[tuple[str, int], tuple[float, list[dict[str, Any]]]] = {}
 
     def list_universe(self, limit: int = 100) -> list[QuoteSnapshot]:
         records = self._get_universe_records()
@@ -108,17 +112,20 @@ class BaostockMarketDataProvider(MarketDataProvider):
     def _get_universe_records(self) -> list[dict[str, Any]]:
         if self._universe_cache:
             return self._universe_cache
-        day = date.today().strftime("%Y-%m-%d")
-        result = self._bs.query_all_stock(day=day)
-        records = _resultset_to_records(result)
-        if not records:
-            result = self._bs.query_all_stock()
+        with self._lock:
+            if self._universe_cache:
+                return self._universe_cache
+            day = date.today().strftime("%Y-%m-%d")
+            result = self._bs.query_all_stock(day=day)
             records = _resultset_to_records(result)
-        filtered = [row for row in records if _is_a_share_code(str(row.get("code") or ""))]
-        if not filtered:
-            raise RuntimeError("BaoStock query_all_stock returned no A-share records")
-        self._universe_cache = filtered
-        return filtered
+            if not records:
+                result = self._bs.query_all_stock()
+                records = _resultset_to_records(result)
+            filtered = [row for row in records if _is_a_share_code(str(row.get("code") or ""))]
+            if not filtered:
+                raise RuntimeError("BaoStock query_all_stock returned no A-share records")
+            self._universe_cache = filtered
+            return filtered
 
     def _find_universe_record(self, bs_code: str) -> dict[str, Any]:
         for record in self._get_universe_records():
@@ -127,6 +134,11 @@ class BaostockMarketDataProvider(MarketDataProvider):
         return {}
 
     def _fetch_history_metric_records(self, bs_code: str, lookback: int = 60) -> list[dict[str, Any]]:
+        cache_key = (bs_code.lower(), lookback)
+        cached = self._history_cache.get(cache_key)
+        now = time.time()
+        if cached is not None and now - cached[0] <= 300:
+            return cached[1]
         start_date = (date.today() - timedelta(days=max(lookback * 3, 180))).strftime("%Y-%m-%d")
         end_date = date.today().strftime("%Y-%m-%d")
         fields = ",".join(
@@ -147,23 +159,30 @@ class BaostockMarketDataProvider(MarketDataProvider):
                 "isST",
             ]
         )
-        result = self._bs.query_history_k_data_plus(
-            bs_code,
-            fields,
-            start_date=start_date,
-            end_date=end_date,
-            frequency="d",
-            adjustflag="2",
-        )
-        records = _resultset_to_records(result)
-        if not records:
-            raise RuntimeError("BaoStock history query returned no records for {code}".format(code=bs_code))
-        records.sort(key=lambda row: str(row.get("date") or ""))
-        return records
+        with self._lock:
+            cached = self._history_cache.get(cache_key)
+            now = time.time()
+            if cached is not None and now - cached[0] <= 300:
+                return cached[1]
+            result = self._bs.query_history_k_data_plus(
+                bs_code,
+                fields,
+                start_date=start_date,
+                end_date=end_date,
+                frequency="d",
+                adjustflag="2",
+            )
+            records = _resultset_to_records(result)
+            if not records:
+                raise RuntimeError("BaoStock history query returned no records for {code}".format(code=bs_code))
+            records.sort(key=lambda row: str(row.get("date") or ""))
+            self._history_cache[cache_key] = (now, records)
+            return records
 
     def _safe_logout(self) -> None:
         try:
-            self._bs.logout()
+            with self._lock:
+                self._bs.logout()
         except Exception:
             pass
 

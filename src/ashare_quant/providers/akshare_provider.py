@@ -25,6 +25,7 @@ class AkshareMarketDataProvider(MarketDataProvider):
         self._cache_ttl_seconds = max(cache_ttl_seconds, 0)
         self._spot_cache_records: list[dict] = []
         self._spot_cache_at: float = 0.0
+        self._daily_cache: dict[tuple[str, int], tuple[float, list[DailyBar]]] = {}
 
     def list_universe(self, limit: int = 100) -> list[QuoteSnapshot]:
         rows = self._get_spot_rows()
@@ -47,6 +48,11 @@ class AkshareMarketDataProvider(MarketDataProvider):
 
     def get_daily_bars(self, symbol: str, lookback: int = 60) -> list[DailyBar]:
         normalized_symbol = normalize_symbol(symbol)
+        cache_key = (normalized_symbol, lookback)
+        cached = self._daily_cache.get(cache_key)
+        now = time.time()
+        if cached is not None and now - cached[0] <= max(self._cache_ttl_seconds, 300):
+            return cached[1]
         start_date = (date.today() - timedelta(days=max(lookback * 3, 120))).strftime("%Y%m%d")
         end_date = date.today().strftime("%Y%m%d")
         data = self._ak.stock_zh_a_hist(
@@ -67,6 +73,7 @@ class AkshareMarketDataProvider(MarketDataProvider):
                 bars.append(bar)
         if not bars:
             raise KeyError(f"No valid historical bars found for symbol: {symbol}")
+        self._daily_cache[cache_key] = (now, bars)
         return bars
 
     def _get_spot_rows(self) -> list[dict]:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from ashare_quant.analysis.scoring import build_factor_set, list_supported_strategies, normalize_strategy
-from ashare_quant.models import RankingsResult, StockDiagnosisResult, UniverseResult
+from ashare_quant.models import RankingsResult, StockBarsResult, StockDiagnosisResult, UniverseResult
 from ashare_quant.providers.base import MarketDataProvider
 
 
@@ -30,19 +32,7 @@ class MarketService:
         strategy_id = normalize_strategy(strategy)
         universe = self.ranking_provider.list_universe(limit=limit)
         universe_meta = self.ranking_provider.get_last_call_meta()
-        diagnoses: list[StockDiagnosisResult] = []
-        for quote in universe:
-            bars = self.ranking_provider.get_daily_bars(quote.symbol, lookback=60)
-            bars_meta = self.ranking_provider.get_last_call_meta()
-            factors = build_factor_set(quote, bars, strategy=strategy_id)
-            diagnoses.append(
-                StockDiagnosisResult(
-                    quote=quote,
-                    factors=factors,
-                    quote_meta=universe_meta,
-                    bars_meta=bars_meta,
-                )
-            )
+        diagnoses = self._build_rank_diagnoses_concurrently(universe, strategy_id, universe_meta)
         ordered = sorted(
             diagnoses,
             key=lambda item: (item.factors.eligible, item.factors.total_score),
@@ -62,6 +52,15 @@ class MarketService:
             self.watchlist_provider,
             symbol=symbol,
             strategy=strategy,
+        )
+
+    def get_stock_bars(self, symbol: str, lookback: int = 60) -> StockBarsResult:
+        bars = self.diagnosis_provider.get_daily_bars(symbol, lookback=lookback)
+        bars_meta = self.diagnosis_provider.get_last_call_meta()
+        return StockBarsResult(
+            symbol=symbol,
+            bars=bars,
+            bars_meta=bars_meta,
         )
 
     def _diagnose_with_provider(
@@ -86,3 +85,34 @@ class MarketService:
 
     def list_strategies(self) -> list[dict[str, str]]:
         return list_supported_strategies()
+
+    def _build_rank_diagnoses_concurrently(
+        self,
+        universe,
+        strategy_id: str,
+        universe_meta,
+    ) -> list[StockDiagnosisResult]:
+        if not universe:
+            return []
+        max_workers = min(8, max(1, len(universe)))
+        results: list[StockDiagnosisResult] = []
+
+        def build_item(quote):
+            bars = self.ranking_provider.get_daily_bars(quote.symbol, lookback=60)
+            bars_meta = self.ranking_provider.get_last_call_meta()
+            factors = build_factor_set(quote, bars, strategy=strategy_id)
+            return StockDiagnosisResult(
+                quote=quote,
+                factors=factors,
+                quote_meta=universe_meta,
+                bars_meta=bars_meta,
+            )
+
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ranking-bars") as pool:
+            futures = [pool.submit(build_item, quote) for quote in universe]
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception:
+                    continue
+        return results

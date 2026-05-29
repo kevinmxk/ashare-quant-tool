@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from ashare_quant.cache.provider_cache import PersistentCacheMarketDataProvider
 from ashare_quant.cache.sqlite_cache import SqliteMarketCache
@@ -9,7 +10,9 @@ from ashare_quant.providers.akshare_provider import AkshareMarketDataProvider
 from ashare_quant.providers.baostock_provider import BaostockMarketDataProvider
 from ashare_quant.providers.base import MarketDataProvider
 from ashare_quant.providers.composite_provider import CompositeMarketDataProvider
+from ashare_quant.providers.eastmoney_provider import EastMoneyMarketDataProvider
 from ashare_quant.providers.mock_provider import MockMarketDataProvider
+from ashare_quant.providers.routing_provider import OperationRoutingMarketDataProvider
 from ashare_quant.providers.sina_provider import SinaMarketDataProvider
 from ashare_quant.providers.tushare_provider import TushareMarketDataProvider
 
@@ -74,6 +77,12 @@ def _build_named_provider(provider_name: str, settings: Settings) -> MarketDataP
     if provider_name in {"mock"}:
         return _wrap_provider(MockMarketDataProvider(), settings)
 
+    if provider_name in {"dual", "eastmoney-baostock", "em-bs"}:
+        return _wrap_provider(_build_dual_source_provider(settings), settings)
+
+    if provider_name in {"eastmoney", "em", "east-money"}:
+        return _wrap_provider(_build_preferred_runtime_chain("eastmoney", settings), settings)
+
     if provider_name in {"akshare", "ak"}:
         return _wrap_provider(_build_preferred_runtime_chain("akshare", settings), settings)
 
@@ -93,7 +102,7 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
     providers: list[MarketDataProvider] = []
 
     try:
-        providers.append(AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds))
+        providers.append(EastMoneyMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds))
     except Exception:
         pass
 
@@ -103,12 +112,7 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
         pass
 
     try:
-        providers.append(
-            TushareMarketDataProvider(
-                token=settings.tushare_token,
-                cache_ttl_seconds=max(settings.provider_cache_ttl_seconds, 300),
-            )
-        )
+        providers.append(AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds))
     except Exception:
         pass
 
@@ -122,7 +126,10 @@ def _build_real_providers(settings: Settings) -> list[MarketDataProvider]:
 
 def _build_preferred_runtime_chain(preferred: str, settings: Settings) -> MarketDataProvider:
     ordered_names: list[str] = []
-    for name in [preferred, "sina", "akshare", "tushare", "baostock"]:
+    fallback_names = ["eastmoney", "sina", "akshare", "baostock"]
+    if preferred == "tushare":
+        fallback_names.insert(1, "tushare")
+    for name in [preferred, *fallback_names]:
         normalized = name.strip().lower()
         if normalized not in ordered_names:
             ordered_names.append(normalized)
@@ -148,6 +155,8 @@ def _build_preferred_runtime_chain(preferred: str, settings: Settings) -> Market
 
 
 def _build_single_runtime_provider(provider_name: str, settings: Settings) -> MarketDataProvider:
+    if provider_name in {"eastmoney", "em", "east-money"}:
+        return EastMoneyMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
     if provider_name in {"akshare", "ak"}:
         return AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
     if provider_name in {"sina", "sina-finance"}:
@@ -162,6 +171,41 @@ def _build_single_runtime_provider(provider_name: str, settings: Settings) -> Ma
     if provider_name == "mock":
         return MockMarketDataProvider()
     raise RuntimeError("Unsupported provider: {name}".format(name=provider_name))
+
+
+def _build_dual_source_provider(settings: Settings) -> MarketDataProvider:
+    quote_provider = _build_composite_from_names(
+        ["eastmoney", "sina", "akshare"],
+        settings,
+    )
+    bars_provider = _build_composite_from_names(
+        ["baostock", "eastmoney", "sina", "akshare"],
+        settings,
+    )
+    return OperationRoutingMarketDataProvider(
+        quote_provider=quote_provider,
+        bars_provider=bars_provider,
+        fast_bars_provider=EastMoneyMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds),
+        name="EastMoneyBaoStock",
+    )
+
+
+def _build_composite_from_names(names: list[str], settings: Settings) -> MarketDataProvider:
+    providers: list[MarketDataProvider] = []
+    for name in names:
+        try:
+            providers.append(_build_single_runtime_provider(name, settings))
+        except Exception:
+            continue
+
+    if settings.use_mock_when_provider_fails:
+        providers.append(MockMarketDataProvider())
+
+    if not providers:
+        raise RuntimeError("No runtime providers are available")
+    if len(providers) == 1:
+        return providers[0]
+    return CompositeMarketDataProvider(providers)
 
 
 def _wrap_provider(provider: MarketDataProvider, settings: Settings) -> MarketDataProvider:
@@ -182,7 +226,13 @@ def _wrap_provider(provider: MarketDataProvider, settings: Settings) -> MarketDa
 
 
 def get_provider_diagnostics(settings: Settings) -> list[dict[str, str | bool]]:
+    return _get_provider_diagnostics_cached(settings)
+
+
+@lru_cache(maxsize=8)
+def _get_provider_diagnostics_cached(settings: Settings) -> list[dict[str, str | bool]]:
     checks: list[dict[str, str | bool]] = []
+    checks.append(_check_provider("eastmoney", _build_eastmoney, settings))
     checks.append(_check_provider("akshare", _build_akshare, settings))
     checks.append(_check_provider("sina", _build_sina, settings))
     checks.append(_check_provider("tushare", _build_tushare, settings))
@@ -219,6 +269,10 @@ def _check_provider(
 
 def _build_akshare(settings: Settings) -> MarketDataProvider:
     return AkshareMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
+
+
+def _build_eastmoney(settings: Settings) -> MarketDataProvider:
+    return EastMoneyMarketDataProvider(cache_ttl_seconds=settings.provider_cache_ttl_seconds)
 
 
 def _build_tushare(settings: Settings) -> MarketDataProvider:
