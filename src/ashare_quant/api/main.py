@@ -1,22 +1,45 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import asdict
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
+from ashare_quant.api.cache import APIMemoryCache
 from ashare_quant.api.schemas import (
+    BarsResponse,
+    BarDataPoint,
     DiagnosisResponse,
     FactorResponse,
     ProviderMetaResponse,
     QuoteResponse,
-    RankingsResponse,
+    RankingRow,
+    RankingsTableResponse,
+    StatusResponse,
     StrategyResponse,
-    UniverseResponse,
+    SummaryResponse,
+    WatchlistRequest,
+    WatchlistResponse,
+    WatchlistRow,
 )
 from ashare_quant.config import get_settings
 from ashare_quant.cache.provider_cache import PersistentCacheMarketDataProvider
-from ashare_quant.providers.factory import build_provider_bundle
+from ashare_quant.providers.factory import build_provider_bundle, get_provider_diagnostics
 from ashare_quant.services.market_service import MarketService
+from ashare_quant.ui.dashboard_data import (
+    bars_to_chart_data,
+    build_rankings_table,
+    build_watchlist_rows,
+    diagnosis_to_dict,
+    enrich_diagnosis_with_pi,
+    parse_watchlist,
+    provider_status,
+    summarize_rankings,
+)
+
+sys.path.insert(0, os.path.abspath("src"))
 
 settings = get_settings()
 bundle = build_provider_bundle(settings)
@@ -29,7 +52,17 @@ market_service = MarketService(
     watchlist_provider=bundle.watchlist_provider,
 )
 
+cache = APIMemoryCache(ttl_seconds=settings.provider_cache_ttl_seconds)
+
 app = FastAPI(title=settings.app_name)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
@@ -57,37 +90,124 @@ def health() -> dict:
     return response
 
 
-@app.get("/universe")
-def universe(limit: int = 20) -> UniverseResponse:
-    result = market_service.get_universe(limit=limit)
-    return UniverseResponse(
-        items=[QuoteResponse(**asdict(quote)) for quote in result.items],
-        meta=_to_meta_response(result.meta),
-    )
-
-
-@app.get("/strategies")
+@app.get("/api/strategies")
 def strategies() -> list[StrategyResponse]:
-    return [StrategyResponse(**item) for item in market_service.list_strategies()]
+    cached = cache.get("strategies")
+    if cached is not None:
+        return cached
+    result = [StrategyResponse(**item) for item in market_service.list_strategies()]
+    cache.set("strategies", result)
+    return result
 
 
-@app.get("/rankings")
-def rankings(limit: int = 20, strategy: str = "trend") -> RankingsResponse:
-    result = market_service.rank_universe(limit=limit, strategy=strategy)
-    return RankingsResponse(
-        items=[_to_response(item) for item in result.items],
-        universe_meta=_to_meta_response(result.universe_meta),
+@app.get("/api/rankings")
+def rankings(limit: int = 20, strategy: str = "trend") -> RankingsTableResponse:
+    cache_key = f"rankings:{limit}:{strategy}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    rankings_result = market_service.rank_universe(limit=limit, strategy=strategy)
+    summary = summarize_rankings(rankings_result)
+    rows = build_rankings_table(rankings_result)
+
+    response = RankingsTableResponse(
+        summary=SummaryResponse(**summary),
+        rows=[RankingRow(**row) for row in rows],
+        universe_meta=_to_meta_response(rankings_result.universe_meta),
     )
+    cache.set(cache_key, response)
+    return response
 
 
-@app.get("/stocks/{symbol}")
+@app.get("/api/stocks/{symbol}")
 def stock_detail(symbol: str, strategy: str = "trend") -> DiagnosisResponse:
+    cache_key = f"stock:{symbol}:{strategy}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         diagnosis = market_service.diagnose_stock(symbol, strategy=strategy)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return _to_response(diagnosis)
 
+    result = enrich_diagnosis_with_pi(diagnosis_to_dict(diagnosis))
+    response = _dict_to_diagnosis_response(result)
+    cache.set(cache_key, response)
+    return response
+
+
+@app.get("/api/stocks/{symbol}/bars")
+def stock_bars(symbol: str, lookback: int = 60) -> BarsResponse:
+    cache_key = f"bars:{symbol}:{lookback}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        bars_result = market_service.get_stock_bars(symbol, lookback=lookback)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    chart_data = bars_to_chart_data(bars_result.bars)
+    response = BarsResponse(
+        symbol=symbol,
+        bars=[BarDataPoint(**d) for d in chart_data],
+        bars_meta=_to_meta_response(bars_result.bars_meta),
+    )
+    cache.set(cache_key, response)
+    return response
+
+
+@app.post("/api/watchlist")
+def watchlist(request: WatchlistRequest) -> WatchlistResponse:
+    symbols = parse_watchlist(",".join(request.symbols))
+    if not symbols:
+        return WatchlistResponse(rows=[])
+
+    cache_key = f"watchlist:{','.join(symbols)}:{request.strategy}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    rows = build_watchlist_rows(market_service, symbols, request.strategy)
+    response = WatchlistResponse(
+        rows=[WatchlistRow(**row) for row in rows],
+    )
+    cache.set(cache_key, response)
+    return response
+
+
+@app.get("/api/status")
+def status() -> StatusResponse:
+    cached = cache.get("status")
+    if cached is not None:
+        return cached
+
+    status_dict = provider_status(provider, settings)
+    diagnostics = status_dict.get("provider_diagnostics")
+    routes = status_dict.get("provider_routes")
+    strategies_list = market_service.list_strategies()
+
+    response = StatusResponse(
+        status="ok",
+        configured_provider=status_dict.get("configured_provider", "-"),
+        active_provider=status_dict.get("active_provider", "-"),
+        active_provider_chain=status_dict.get("active_provider_chain"),
+        persistent_cache_enabled=status_dict.get("persistent_cache_enabled", False),
+        cache=status_dict.get("cache"),
+        provider_routes=routes,
+        provider_diagnostics=diagnostics,
+        strategies=[StrategyResponse(**item) for item in strategies_list],
+    )
+    cache.set("status", response)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _to_response(diagnosis) -> DiagnosisResponse:
     return DiagnosisResponse(
@@ -101,4 +221,19 @@ def _to_response(diagnosis) -> DiagnosisResponse:
 def _to_meta_response(meta) -> ProviderMetaResponse | None:
     if meta is None:
         return None
+    if isinstance(meta, dict):
+        return ProviderMetaResponse(**meta)
     return ProviderMetaResponse(**asdict(meta))
+
+
+def _dict_to_diagnosis_response(data: dict) -> DiagnosisResponse:
+    quote = data["quote"]
+    factors = data["factors"]
+    quote_meta = data.get("quote_meta")
+    bars_meta = data.get("bars_meta")
+    return DiagnosisResponse(
+        quote=QuoteResponse(**quote),
+        factors=FactorResponse(**factors),
+        quote_meta=_to_meta_response(quote_meta) if quote_meta else None,
+        bars_meta=_to_meta_response(bars_meta) if bars_meta else None,
+    )
