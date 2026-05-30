@@ -175,6 +175,15 @@ streamlit run streamlit_app.py
 
 ## V1 → V2 更新日志
 
+### v2.1（2026-05-30）自选池持久化 + 逐只管理
+- 🆕 自选股持久化存储到 SQLite，系统重启后保留
+- 🆕 单只添加：新增输入框每次只加一只股票
+- 🆕 行内删除：每只自选股独立删除，不刷新全表
+- 🆕 新增 API：`GET /api/watchlist/list`、`POST /api/watchlist/add`、`DELETE /api/watchlist/remove/{symbol}`
+- 🆕 启动自动加载已有的自选股列表
+- ❌ 废弃旧版逗号分隔文本输入 + 批量刷新模式
+- 🛠️ 修复端口占导致启动失败问题（改用无 reload 模式）
+
 ### v2.0（2026-05-29）前后端分离重构
 - 🆕 新增 Vue 3 + Vite 前端（Tailwind CSS + ECharts）
 - 🆕 新增 FastAPI 后端（RESTful API + 内存缓存）

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import atexit
 import os
+import signal
 import sys
 from dataclasses import asdict
+import tempfile
+
+# PID file for graceful shutdown from batch script
+PID_FILE = os.path.join(tempfile.gettempdir(), "aquant_api.pid")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -66,6 +72,50 @@ watchlist_cache = (
 )
 
 app = FastAPI(title=settings.app_name)
+
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown hooks
+# ---------------------------------------------------------------------------
+
+def _cleanup_pid_file():
+    """Remove PID file on exit."""
+    try:
+        if os.path.exists(PID_FILE):
+            os.remove(PID_FILE)
+    except OSError:
+        pass
+
+
+def _write_pid_file():
+    """Write current PID to file for stop.bat to find."""
+    try:
+        with open(PID_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
+@app.on_event("startup")
+async def _on_startup():
+    _write_pid_file()
+
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    _cleanup_pid_file()
+
+
+atexit.register(_cleanup_pid_file)
+
+
+def _force_cleanup(signum, frame):
+    """Signal handler for SIGTERM to clean up PID file."""
+    _cleanup_pid_file()
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, _force_cleanup)
 
 app.add_middleware(
     CORSMiddleware,
