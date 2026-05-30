@@ -23,6 +23,7 @@
         <table class="w-full min-w-[860px] text-sm">
           <thead>
             <tr class="border-b border-line bg-bg">
+              <th class="w-10 px-2 py-3 text-center text-[10px] font-bold text-muted uppercase tracking-wider"></th>
               <th class="px-4 py-3 text-left text-[10px] font-bold text-muted uppercase tracking-wider">代码</th>
               <th class="px-4 py-3 text-left text-[10px] font-bold text-muted uppercase tracking-wider">名称</th>
               <th class="px-4 py-3 text-left text-[10px] font-bold text-muted uppercase tracking-wider">总分</th>
@@ -33,37 +34,68 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="symbol in symbols" :key="symbol" class="border-b border-line hover:bg-panel2 transition-colors">
-              <td class="px-4 py-3 font-medium text-text">
-                <router-link :to="`/diagnosis?symbol=${symbol}`" class="hover:text-blue transition-colors">
-                  {{ symbol }}
-                </router-link>
-              </td>
-              <template v-if="rowMap[symbol]">
-                <td class="px-4 py-3 text-text">{{ rowMap[symbol].name }}</td>
-                <td class="px-4 py-3 font-semibold text-text">{{ formatScore(rowMap[symbol].score) }}</td>
-                <td class="px-4 py-3 text-muted">{{ rowMap[symbol].latest_price }}</td>
-                <td class="px-4 py-3 font-medium" :class="pctColor(rowMap[symbol].pct_change)">
-                  {{ rowMap[symbol].pct_change }}
+            <template v-for="symbol in symbols" :key="symbol">
+              <tr class="border-b border-line hover:bg-panel2 transition-colors">
+                <td class="px-2 py-3 text-center">
+                  <button
+                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:text-blue transition-colors"
+                    :class="{ 'text-blue bg-panel2': expandedSymbol === symbol }"
+                    :title="expandedSymbol === symbol ? '收起走势' : '展开走势'"
+                    @click="toggleChart(symbol)"
+                  >
+                    <TrendingUp v-if="expandedSymbol !== symbol" class="h-4 w-4" />
+                    <ChevronUp v-else class="h-4 w-4" />
+                  </button>
                 </td>
-                <td class="px-4 py-3 text-muted max-w-md truncate">{{ rowMap[symbol].entry_signal }}</td>
-              </template>
-              <template v-else>
-                <td colspan="5" class="px-4 py-3 text-muted">
-                  {{ loadingRows[symbol] ? '正在诊断...' : rowErrors[symbol] || '等待加载' }}
+                <td class="px-4 py-3 font-medium text-text">
+                  <router-link :to="`/diagnosis?symbol=${symbol}`" class="hover:text-blue transition-colors">
+                    {{ symbol }}
+                  </router-link>
                 </td>
-              </template>
-              <td class="px-4 py-3 text-right">
-                <button
-                  class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-line text-muted hover:border-red hover:text-red transition-colors disabled:opacity-50"
-                  :disabled="removing[symbol]"
-                  :title="`删除 ${symbol}`"
-                  @click="removeSymbol(symbol)"
-                >
-                  <Trash2 class="h-4 w-4" />
-                </button>
-              </td>
-            </tr>
+                <template v-if="rowMap[symbol]">
+                  <td class="px-4 py-3 text-text">{{ rowMap[symbol].name }}</td>
+                  <td class="px-4 py-3 font-semibold text-text">{{ formatScore(rowMap[symbol].score) }}</td>
+                  <td class="px-4 py-3 text-muted">{{ rowMap[symbol].latest_price }}</td>
+                  <td class="px-4 py-3 font-medium" :class="pctColor(rowMap[symbol].pct_change)">
+                    {{ rowMap[symbol].pct_change }}
+                  </td>
+                  <td class="px-4 py-3 text-muted max-w-md truncate">{{ rowMap[symbol].entry_signal }}</td>
+                </template>
+                <template v-else>
+                  <td colspan="5" class="px-4 py-3 text-muted">
+                    {{ loadingRows[symbol] ? '正在诊断...' : rowErrors[symbol] || '等待加载' }}
+                  </td>
+                </template>
+                <td class="px-4 py-3 text-right">
+                  <button
+                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-line text-muted hover:border-red hover:text-red transition-colors disabled:opacity-50"
+                    :disabled="removing[symbol]"
+                    :title="`删除 ${symbol}`"
+                    @click="removeSymbol(symbol)"
+                  >
+                    <Trash2 class="h-4 w-4" />
+                  </button>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="8" class="p-0">
+                  <div
+                    class="overflow-hidden transition-all duration-300 ease-out"
+                    :class="expandedSymbol === symbol ? 'max-h-[130px] opacity-100' : 'max-h-0 opacity-0'"
+                  >
+                    <div class="px-4 py-3 bg-panel2 border-b border-line h-[100px]">
+                      <div v-if="loadingBars[symbol]" class="h-full flex items-center justify-center">
+                        <Loader2 class="h-5 w-5 text-muted animate-spin" />
+                      </div>
+                      <MiniChart v-else-if="barsMap[symbol]" :data="barsMap[symbol]" />
+                      <div v-else class="h-full flex items-center justify-center text-sm text-muted">
+                        暂无数据
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -97,7 +129,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { Plus, Trash2 } from 'lucide-vue-next'
+import { Plus, Trash2, TrendingUp, ChevronUp, Loader2 } from 'lucide-vue-next'
 import client from '../api/client'
 import type {
   Strategy,
@@ -105,9 +137,12 @@ import type {
   WatchlistListResponse,
   WatchlistResponse,
   WatchlistRow,
+  BarDataPoint,
+  BarsResponse,
 } from '../api/types'
 import LoadingSpinner from '../components/LoadingSpinner.vue'
 import ErrorAlert from '../components/ErrorAlert.vue'
+import MiniChart from '../components/MiniChart.vue'
 
 const input = ref('')
 const strategy = ref('trend')
@@ -121,6 +156,9 @@ const rowMap = reactive<Record<string, WatchlistRow>>({})
 const loadingRows = reactive<Record<string, boolean>>({})
 const rowErrors = reactive<Record<string, string>>({})
 const removing = reactive<Record<string, boolean>>({})
+const expandedSymbol = ref<string | null>(null)
+const barsMap = reactive<Record<string, BarDataPoint[]>>({})
+const loadingBars = reactive<Record<string, boolean>>({})
 
 async function loadStrategies() {
   try {
@@ -161,6 +199,28 @@ async function loadRow(symbol: string) {
     rowErrors[symbol] = e.message || '诊断失败'
   } finally {
     loadingRows[symbol] = false
+  }
+}
+
+async function toggleChart(symbol: string) {
+  if (expandedSymbol.value === symbol) {
+    expandedSymbol.value = null
+    return
+  }
+  expandedSymbol.value = symbol
+  if (!barsMap[symbol] || barsMap[symbol].length === 0) {
+    loadingBars[symbol] = true
+    try {
+      const res = await client.get<BarsResponse>(`/api/stocks/${symbol}/bars`, {
+        params: { lookback: 60 },
+      })
+      const allBars = res.data.bars
+      barsMap[symbol] = allBars.slice(-30)
+    } catch (e: any) {
+      console.error(`加载 ${symbol} 的日线数据失败`, e)
+    } finally {
+      loadingBars[symbol] = false
+    }
   }
 }
 
@@ -210,6 +270,11 @@ async function removeSymbol(symbol: string) {
     delete rowMap[symbol]
     delete loadingRows[symbol]
     delete rowErrors[symbol]
+    delete barsMap[symbol]
+    delete loadingBars[symbol]
+    if (expandedSymbol.value === symbol) {
+      expandedSymbol.value = null
+    }
   } catch (e: any) {
     rowErrors[symbol] = e.message || '删除失败'
   } finally {

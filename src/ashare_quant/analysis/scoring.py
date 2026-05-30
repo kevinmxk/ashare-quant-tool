@@ -94,12 +94,14 @@ def _build_trend_factor_set(quote: QuoteSnapshot, bars: list[DailyBar]) -> Facto
         risk_flags.append("换手率过高，短线博弈意味较浓")
 
     eligible = not failed_filters
-    if eligible and momentum >= 8 and quote.volume_ratio >= 1.2:
-        entry_signal = "可考虑顺势跟随，优先等放量突破后分批介入"
-    elif eligible:
-        entry_signal = "趋势达标，但更适合等待下一次放量确认"
-    else:
-        entry_signal = "暂不追涨，先等待趋势、动量和流动性同步改善"
+    entry_signal = _trend_entry_signal(
+        eligible=eligible,
+        trend=trend,
+        momentum=momentum,
+        volume_ratio=quote.volume_ratio,
+        liquidity=liquidity,
+        risk=risk,
+    )
 
     if trend < 50:
         exit_signal = "若跌回 MA20 下方且趋势破坏，优先减仓"
@@ -177,12 +179,15 @@ def _build_pullback_factor_set(quote: QuoteSnapshot, bars: list[DailyBar]) -> Fa
         risk_flags.append("股价偏离均线过深，左侧接法风险较大")
 
     eligible = not failed_filters
-    if eligible and -2 <= ma20_distance <= 1:
-        entry_signal = "可在 MA20 附近缩量企稳后分批试错"
-    elif eligible:
-        entry_signal = "形态接近达标，等待回调止跌确认更稳妥"
-    else:
-        entry_signal = "先观察，不宜把普通下跌误当作回调低吸机会"
+    entry_signal = _pullback_entry_signal(
+        eligible=eligible,
+        trend=trend,
+        ma20_distance=ma20_distance,
+        pullback=pullback,
+        volume_ratio=quote.volume_ratio,
+        liquidity=liquidity,
+        risk=risk,
+    )
 
     if trend < 50 or pullback < -15:
         exit_signal = "若趋势跌坏或回撤扩大到 15% 以上，应优先离场"
@@ -257,12 +262,15 @@ def _build_value_factor_set(quote: QuoteSnapshot, bars: list[DailyBar]) -> Facto
         risk_flags.append("价格已接近阶段高位，性价比在下降")
 
     eligible = not failed_filters
-    if eligible and momentum >= -3:
-        entry_signal = "估值与稳定性达标，可考虑分批低吸或中线观察"
-    elif eligible:
-        entry_signal = "基本面风格达标，但更适合等走势止跌后再配置"
-    else:
-        entry_signal = "当前不满足稳健低估框架，暂时以观察为主"
+    entry_signal = _value_entry_signal(
+        eligible=eligible,
+        valuation=valuation,
+        risk=risk,
+        stability=stability_score,
+        momentum=momentum,
+        trend=trend,
+        liquidity=liquidity,
+    )
 
     if valuation < 55 or trend < 50:
         exit_signal = "若估值优势消失且趋势走弱，应降低持仓"
@@ -296,6 +304,189 @@ def _pullback_quality_score(ma20_distance: float, pullback: float) -> float:
     if pullback < -15:
         drawdown_score -= 20
     return max(0.0, min((ma_score * 0.55 + drawdown_score * 0.45), 100.0))
+
+
+def _trend_entry_signal(
+    *,
+    eligible: bool,
+    trend: float,
+    momentum: float,
+    volume_ratio: float,
+    liquidity: float,
+    risk: float,
+) -> str:
+    momentum_text = _format_percent(momentum)
+    volume_text = _format_ratio(volume_ratio)
+
+    if not eligible:
+        misses: list[str] = []
+        if trend < 50:
+            misses.append("趋势尚未形成：均线多头结构未建立")
+        elif trend < 100:
+            misses.append("趋势只站上短期均线：MA20 尚未确认强于 MA60")
+        if momentum <= 3:
+            misses.append(f"动量不足：近 20 日涨幅仅 {momentum_text}")
+        if liquidity < 45:
+            misses.append(f"流动性偏低：流动性评分 {liquidity:.0f}")
+        if risk < 40:
+            misses.append(f"波动风险偏高：风险评分 {risk:.0f}")
+        if volume_ratio < 1.2:
+            misses.append(f"量能未配合：量比 {volume_text}")
+        return " + ".join(misses[:2]) + "，暂不追涨，等待趋势、动量或量能改善"
+
+    trend_phrase = "均线多头排列明确" if trend >= 100 else "短期趋势已转强"
+    if momentum > 8:
+        momentum_phrase = f"近 20 日涨幅 {momentum_text}，动量强"
+    elif momentum > 3:
+        momentum_phrase = f"近 20 日涨幅 {momentum_text}，动量温和"
+    else:
+        momentum_phrase = f"近 20 日涨幅 {momentum_text}，动量刚达观察线"
+
+    if volume_ratio > 2.5:
+        volume_phrase = f"量比 {volume_text} 异常放大"
+        action = "适合等冲高回落后再分批跟随，避免情绪化追高"
+    elif volume_ratio >= 1.2:
+        volume_phrase = f"量比 {volume_text} 放大配合"
+        action = "可在突破确认后顺势建仓"
+    else:
+        volume_phrase = f"量比 {volume_text} 偏低"
+        action = "更适合等待下一次放量确认"
+
+    if liquidity >= 70 and risk >= 55:
+        guard = "流动性充裕且风险评分稳健"
+    elif liquidity >= 70:
+        guard = "流动性充裕但波动仍需控制"
+    elif risk < 55:
+        guard = "流动性一般且波动偏高"
+    else:
+        guard = "流动性一般但风险尚可"
+
+    return f"{trend_phrase}，{momentum_phrase}，{volume_phrase}；{guard}，{action}"
+
+
+def _pullback_entry_signal(
+    *,
+    eligible: bool,
+    trend: float,
+    ma20_distance: float,
+    pullback: float,
+    volume_ratio: float,
+    liquidity: float,
+    risk: float,
+) -> str:
+    ma_text = _format_percent(ma20_distance)
+    pullback_text = _format_percent(abs(pullback))
+    volume_text = _format_ratio(volume_ratio)
+
+    if not eligible:
+        misses: list[str] = []
+        if trend < 100:
+            misses.append("中期趋势不够强：尚未形成完整多头结构")
+        if pullback > -2:
+            misses.append(f"回撤不足：近 20 日高点回落仅 {pullback_text}")
+        elif pullback < -12:
+            misses.append(f"回撤过深：近 20 日高点回落 {pullback_text}")
+        if ma20_distance < -4:
+            misses.append(f"偏离 MA20 过深：股价距 MA20 {ma_text}")
+        elif ma20_distance > 3:
+            misses.append(f"尚未回到均线附近：股价高于 MA20 {ma_text}")
+        if liquidity < 40:
+            misses.append(f"承接不足：流动性评分 {liquidity:.0f}")
+        if risk < 40:
+            misses.append(f"波动过大：风险评分 {risk:.0f}")
+        return " + ".join(misses[:2]) + "，先观察止跌和承接变化"
+
+    if -1 <= ma20_distance <= 1:
+        ma_phrase = f"股价距 MA20 仅 {ma_text}，贴近均线"
+    elif ma20_distance < -1:
+        ma_phrase = f"股价低于 MA20 {ma_text}，左侧修复特征更强"
+    else:
+        ma_phrase = f"股价高于 MA20 {ma_text}，回踩尚未完全到位"
+
+    if pullback <= -9:
+        pullback_phrase = f"近 20 日回撤 {pullback_text}，回调偏深"
+    elif pullback <= -5:
+        pullback_phrase = f"近 20 日回撤 {pullback_text}，幅度适中"
+    else:
+        pullback_phrase = f"近 20 日回撤 {pullback_text}，回调较浅"
+
+    if volume_ratio < 0.8:
+        volume_phrase = f"量比 {volume_text}，缩量较明显"
+        action = "可等待缩量企稳后的首个放量反弹再试仓"
+    elif volume_ratio <= 1.5:
+        volume_phrase = f"量比 {volume_text}，承接相对平稳"
+        action = "适合在止跌确认后分批低吸"
+    else:
+        volume_phrase = f"量比 {volume_text}，回调中交投活跃"
+        action = "需确认不是放量下跌后再介入"
+
+    guard = "流动性充裕" if liquidity >= 65 else "流动性一般"
+    if risk < 55:
+        guard += "且波动偏高，仓位应更轻"
+    else:
+        guard += "且波动可控"
+
+    return f"{ma_phrase}，{pullback_phrase}，{volume_phrase}；{guard}，{action}"
+
+
+def _value_entry_signal(
+    *,
+    eligible: bool,
+    valuation: float,
+    risk: float,
+    stability: float,
+    momentum: float,
+    trend: float,
+    liquidity: float,
+) -> str:
+    momentum_text = _format_percent(momentum)
+
+    if not eligible:
+        misses: list[str] = []
+        if valuation < 65:
+            misses.append(f"估值吸引力不足：估值评分 {valuation:.0f}")
+        if risk < 55:
+            misses.append(f"稳定性不足：风险评分 {risk:.0f}")
+        if trend < 50:
+            misses.append("趋势偏弱：股价已有走坏迹象")
+        if liquidity < 25:
+            misses.append(f"流动性过低：流动性评分 {liquidity:.0f}")
+        if momentum < -12:
+            misses.append(f"跌势过急：近 20 日跌幅 {abs(momentum):.1f}%")
+        return " + ".join(misses[:2]) + "，暂不纳入稳健低估配置"
+
+    if valuation >= 75:
+        valuation_phrase = f"估值评分 {valuation:.0f}，安全边际较好"
+    else:
+        valuation_phrase = f"估值评分 {valuation:.0f}，吸引力刚达标"
+
+    if stability >= 70 and risk >= 65:
+        stability_phrase = f"稳定性评分 {stability:.0f} 且风险评分 {risk:.0f}，波动较可控"
+    elif stability >= 60:
+        stability_phrase = f"稳定性评分 {stability:.0f}，适合分批观察"
+    else:
+        stability_phrase = f"稳定性评分 {stability:.0f}，仍需降低建仓节奏"
+
+    if momentum >= 3:
+        momentum_phrase = f"近 20 日涨幅 {momentum_text}，已有温和修复"
+        action = "可用中线仓位分批配置"
+    elif momentum >= -3:
+        momentum_phrase = f"近 20 日涨幅 {momentum_text}，走势基本企稳"
+        action = "可小步低吸并继续跟踪估值修复"
+    else:
+        momentum_phrase = f"近 20 日涨幅 {momentum_text}，仍在弱修复"
+        action = "更适合等待止跌确认后再配置"
+
+    liquidity_phrase = "流动性充足" if liquidity >= 45 else "流动性一般"
+    return f"{valuation_phrase}，{stability_phrase}，{momentum_phrase}；{liquidity_phrase}，{action}"
+
+
+def _format_percent(value: float) -> str:
+    return f"{value:.1f}%"
+
+
+def _format_ratio(value: float) -> str:
+    return f"{value:.1f}"
 
 
 def _normalize(value: float, low: float, high: float) -> float:
