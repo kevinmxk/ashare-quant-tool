@@ -10,10 +10,11 @@
 |------|------|------|
 | **前端** | Vue 3 + TypeScript + Vite | Composition API，响应式布局 |
 | **UI 框架** | Tailwind CSS v4 | 深色金融风格（TradingView 配色） |
-| **图表** | ECharts | K 线图 + 成交量 + MA20 |
-| **后端** | FastAPI + uvicorn | RESTful API，端口 8000 |
+| **图表** | ECharts | K 线图 + 成交量 + 迷你走势图 |
+| **后端** | FastAPI + uvicorn | RESTful API，端口 8018 |
 | **数据采集** | EastMoney HTTP + BaoStock SDK | 双源智能路由 |
 | **缓存** | SQLite（持久）+ 内存 TTL | 冷热缓存分离，后台刷新 |
+| **定时刷新** | APScheduler + chinesecalendar | 交易时段每 5 分钟自动更新 |
 | **备选前端** | Streamlit | 纯 Python 一体化方案（保留） |
 
 ---
@@ -33,6 +34,7 @@
 - **SQLite WAL 模式**：支持并发读写不锁表
 
 ### 缓存策略
+
 | 缓存层 | 有效期 | 说明 |
 |--------|--------|------|
 | API 内存缓存 | 30s~120s | FastAPI 层，替代 Streamlit cache_data |
@@ -41,6 +43,12 @@
 | Provider 内存缓存 | 5min | BaoStock 进程内缓存 |
 
 > **SQLite 缓存持久在磁盘**，重启后缓存仍在，没过期就不调 API。
+
+### 自动刷新
+- 后端起用 APScheduler 定时任务，**交易时段每 5 分钟** 刷新所有自选股数据
+- 前端静默轮询，不打断用户交互、不重置展开状态
+- 交易日判断基于 chinesecalendar（A 股实际交易日，自动排除节假日 + 调休）
+- 交易时间判断：周一至周五 9:30-15:00，非交易时段自动跳过
 
 ---
 
@@ -57,24 +65,26 @@
 │   │   ├── components/
 │   │   │   ├── AppSidebar.vue    # 侧边栏导航
 │   │   │   ├── KlineChart.vue    # ECharts K线图
+│   │   │   ├── MiniChart.vue     # 迷你K线图+成交量（自选池）
 │   │   │   ├── MetricCard.vue    # 指标卡片
 │   │   │   ├── LoadingSpinner.vue
 │   │   │   └── ErrorAlert.vue
 │   │   ├── views/
 │   │   │   ├── DiagnosisView.vue # 个股诊断
 │   │   │   ├── RankingsView.vue  # 策略榜单
-│   │   │   ├── WatchlistView.vue # 自选池
+│   │   │   ├── WatchlistView.vue # 自选池（含展开K线图+自动刷新）
 │   │   │   └── StatusView.vue    # 系统状态
 │   │   ├── router/index.ts
 │   │   ├── App.vue
 │   │   └── main.ts
-│   ├── vite.config.ts            # Vite 配置（代理 /api → 8000）
+│   ├── vite.config.ts            # Vite 配置（代理 /api → 8018）
 │   └── package.json
 ├── src/ashare_quant/             # Python 核心
 │   ├── api/                      # FastAPI 后端
-│   │   ├── main.py               # API 路由
+│   │   ├── main.py               # API 路由 + 定时刷新任务
 │   │   ├── schemas.py            # Pydantic Schema
-│   │   └── cache.py              # 内存缓存
+│   │   ├── cache.py              # 内存缓存
+│   │   └── trading_calendar.py   # A股交易日判断（含节假日/调休）
 │   ├── providers/                # 数据源
 │   │   ├── eastmoney_provider.py # 东方财富直调（HTTP 0.07s）
 │   │   ├── baostock_provider.py  # BaoStock 日线
@@ -93,11 +103,13 @@
 │   ├── ui/
 │   │   └── dashboard_data.py     # UI 数据转换
 │   └── analysis/
-│       └── scoring.py            # 因子评分
+│       └── scoring.py            # 因子评分 + 113种入场提示
 ├── data/cache/
 │   └── market_cache.sqlite3      # 缓存文件
 ├── streamlit_app.py              # Streamlit 备选前端
-├── start_quant_tool.bat          # 一键启动脚本
+├── start_quant_tool.bat          # 启动后端 + 前端
+├── stop.bat                      # 优雅停止后端
+├── quant.bat                     # 菜单式启停管理器
 └── README.md
 ```
 
@@ -110,7 +122,7 @@
 **终端 1 — 后端**
 ```bash
 cd C:\Users\soap\.openclaw\workspace\ashare-quant-tool
-uvicorn src.ashare_quant.api.main:app --reload --port 8000
+uvicorn src.ashare_quant.api.main:app --reload --port 8018
 ```
 
 **终端 2 — 前端**
@@ -130,8 +142,26 @@ streamlit run streamlit_app.py
 
 浏览器打开 **http://localhost:8501**
 
-### 方式 3：一键启动（Windows）
-双击 `start_quant_tool.bat`，自动启动后端 + 前端 + 打开浏览器。
+### 方式 3：菜单管理器（推荐 Windows）
+双击 **`quant.bat`**，选择：
+
+- **[1] Start** — 自动清理端口 + 启动后端 + 前端 + 打开浏览器
+- **[2] Stop + Exit** — 优雅停止后端，退出
+
+> 启动后自动打开浏览器访问 **http://localhost:5173**
+
+---
+
+## 自选池功能
+
+| 功能 | 说明 |
+|------|------|
+| 添加自选 | 输入框单只添加，实时诊断 |
+| 删除自选 | 行内删除，独立操作 |
+| 迷你K线图 | 展开查看30日走势 + 成交量（涨红跌绿） |
+| 入场提示 | 113种精细化文案，嵌入具体数值 |
+| 自动刷新 | 交易时段每5分钟更新全量数据 |
+| 持久存储 | 重启后自选池不丢失 |
 
 ---
 
@@ -144,17 +174,20 @@ streamlit run streamlit_app.py
 | `/api/stocks/{symbol}?strategy=trend` | GET | 个股诊断 |
 | `/api/watchlist` | POST | 自选池批量诊断 |
 | `/api/stocks/{symbol}/bars?lookback=60` | GET | 历史日线 |
+| `/api/watchlist/list` | GET | 自选池列表 |
+| `/api/watchlist/add` | POST | 添加自选股 |
+| `/api/watchlist/remove/{symbol}` | DELETE | 删除自选股 |
 | `/api/status` | GET | 系统状态 |
 
 ---
 
 ## 策略说明
 
-| 策略 | 说明 |
-|------|------|
-| `trend` | 趋势突破，强势股跟随 |
-| `pullback` | 回调低吸，强趋势回撤观察 |
-| `value` | 价值稳健，低估值低波动 |
+| 策略 | 说明 | 入场提示数 |
+|------|------|-----------|
+| `trend` | 趋势突破，强势股跟随 | 43 种 |
+| `pullback` | 回调低吸，强趋势回撤观察 | 40 种 |
+| `value` | 价值稳健，低估值低波动 | 30 种 |
 
 每只股票输出：`total_score`（0~100）、`eligible`、`entry_signal`、`exit_signal`、`failed_filters`、`risk_flags`
 
@@ -175,6 +208,19 @@ streamlit run streamlit_app.py
 
 ## V1 → V2 更新日志
 
+### v2.2（2026-05-30）迷你K线图 + 入场提示精细化 + 定时刷新
+- 🆕 自选池迷你K线图+成交量（A股涨红跌绿配色）
+- 🆕 入场提示从 2-3 种扩展至 113 种（嵌入具体数值）
+- 🆕 交易时段自动刷新（APScheduler + chinesecalendar）
+- 🆕 交易日判断（避开节假日/调休，仅 9:30-15:00）
+- 🆕 前端每5分钟静默轮询，不打断交互
+- 🆕 自选池批量诊断（一次性 POST）
+- 🆕 quant.bat / stop.bat 优雅启停脚本
+- 🆕 后端优雅关闭（PID文件 + SIGTERM）
+- 🆕 后端端口改为 8018（避免冲突）
+- 🛠️ 修复 py-mini-racer V8 冲突导致启动崩溃
+- 🛠️ 修复批处理 CRLF 换行符
+
 ### v2.1（2026-05-30）自选池持久化 + 逐只管理
 - 🆕 自选股持久化存储到 SQLite，系统重启后保留
 - 🆕 单只添加：新增输入框每次只加一只股票
@@ -182,7 +228,6 @@ streamlit run streamlit_app.py
 - 🆕 新增 API：`GET /api/watchlist/list`、`POST /api/watchlist/add`、`DELETE /api/watchlist/remove/{symbol}`
 - 🆕 启动自动加载已有的自选股列表
 - ❌ 废弃旧版逗号分隔文本输入 + 批量刷新模式
-- 🛠️ 修复端口占导致启动失败问题（改用无 reload 模式）
 
 ### v2.0（2026-05-29）前后端分离重构
 - 🆕 新增 Vue 3 + Vite 前端（Tailwind CSS + ECharts）
