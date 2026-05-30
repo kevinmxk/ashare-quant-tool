@@ -3,12 +3,14 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import asdict
 from datetime import datetime
 from typing import Iterator
 
+from ashare_quant.cache.impl.bar_cache import BarCache
+from ashare_quant.cache.impl.quote_cache import QuoteCache
+from ashare_quant.cache.impl.universe_cache import UniverseCache
+from ashare_quant.cache.impl.watchlist_cache import WatchlistCache
 from ashare_quant.models import DailyBar, QuoteSnapshot
-from ashare_quant.providers.shared_cleaner import parse_trade_date, safe_float, safe_text
 
 
 class SqliteMarketCache:
@@ -19,135 +21,32 @@ class SqliteMarketCache:
         directory = os.path.dirname(self.db_path)
         if directory:
             os.makedirs(directory, exist_ok=True)
+        self._quote_cache = QuoteCache(self._connect)
+        self._bar_cache = BarCache(self._connect)
+        self._universe_cache = UniverseCache(self._connect, self._quote_cache)
+        self._watchlist_cache = WatchlistCache(self._connect)
         self._initialize()
 
     def save_universe(self, provider_name: str, quotes: list[QuoteSnapshot], source_provider: str | None = None) -> None:
-        if not quotes:
-            return
-        fetched_at = utcnow_text()
-        actual_source = source_provider or provider_name
-        with self._connect() as conn:
-            for quote in quotes:
-                self._upsert_quote(conn, provider_name, quote, fetched_at, actual_source)
-            batch_id = conn.execute(
-                """
-                INSERT INTO universe_batches (provider_name, source_provider, fetched_at, item_count)
-                VALUES (?, ?, ?, ?)
-                """,
-                (provider_name, actual_source, fetched_at, len(quotes)),
-            ).lastrowid
-            conn.executemany(
-                """
-                INSERT INTO universe_batch_items (batch_id, symbol, position)
-                VALUES (?, ?, ?)
-                """,
-                [(batch_id, quote.symbol, index) for index, quote in enumerate(quotes)],
-            )
+        self._universe_cache.save_universe(provider_name, quotes, source_provider)
 
     def load_universe(self, provider_name: str, max_age_seconds: int, limit: int) -> list[QuoteSnapshot]:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT id, fetched_at
-                FROM universe_batches
-                WHERE provider_name = ?
-                ORDER BY fetched_at DESC
-                LIMIT 1
-                """,
-                (provider_name,),
-            ).fetchone()
-            if row is None:
-                return []
-            if _seconds_since(row["fetched_at"]) > max_age_seconds:
-                return []
-            rows = conn.execute(
-                """
-                SELECT q.*
-                FROM universe_batch_items u
-                JOIN quote_cache q
-                  ON q.provider_name = ?
-                 AND q.symbol = u.symbol
-                WHERE u.batch_id = ?
-                ORDER BY u.position ASC
-                LIMIT ?
-                """,
-                (provider_name, row["id"], limit),
-            ).fetchall()
-            return [self._row_to_quote(item) for item in rows]
+        return self._universe_cache.load_universe(provider_name, max_age_seconds, limit)
 
     def get_universe_cache_meta(self, provider_name: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT source_provider, fetched_at, item_count
-                FROM universe_batches
-                WHERE provider_name = ?
-                ORDER BY fetched_at DESC
-                LIMIT 1
-                """,
-                (provider_name,),
-            ).fetchone()
-            if row is None:
-                return None
-            return {
-                "source_provider": str(row["source_provider"] or provider_name),
-                "updated_at": str(row["fetched_at"]),
-                "age_seconds": _seconds_since(row["fetched_at"]),
-                "item_count": int(row["item_count"]),
-            }
+        return self._universe_cache.get_universe_cache_meta(provider_name)
 
     def load_latest_quote(self, provider_name: str, symbol: str, max_age_seconds: int) -> QuoteSnapshot | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT *
-                FROM quote_cache
-                WHERE provider_name = ? AND symbol = ?
-                LIMIT 1
-                """,
-                (provider_name, symbol),
-            ).fetchone()
-            if row is None:
-                return None
-            if _seconds_since(row["updated_at"]) > max_age_seconds:
-                return None
-            return self._row_to_quote(row)
+        return self._quote_cache.load_latest_quote(provider_name, symbol, max_age_seconds)
 
     def load_latest_quote_any_age(self, provider_name: str, symbol: str) -> QuoteSnapshot | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT *
-                FROM quote_cache
-                WHERE provider_name = ? AND symbol = ?
-                LIMIT 1
-                """,
-                (provider_name, symbol),
-            ).fetchone()
-            return self._row_to_quote(row) if row is not None else None
+        return self._quote_cache.load_latest_quote_any_age(provider_name, symbol)
 
     def get_quote_cache_meta(self, provider_name: str, symbol: str) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT source_provider, updated_at
-                FROM quote_cache
-                WHERE provider_name = ? AND symbol = ?
-                LIMIT 1
-                """,
-                (provider_name, symbol),
-            ).fetchone()
-            if row is None:
-                return None
-            return {
-                "source_provider": str(row["source_provider"] or provider_name),
-                "updated_at": str(row["updated_at"]),
-                "age_seconds": _seconds_since(row["updated_at"]),
-            }
+        return self._quote_cache.get_quote_cache_meta(provider_name, symbol)
 
     def save_quote(self, provider_name: str, quote: QuoteSnapshot, source_provider: str | None = None) -> None:
-        with self._connect() as conn:
-            self._upsert_quote(conn, provider_name, quote, utcnow_text(), source_provider or provider_name)
+        self._quote_cache.save_quote(provider_name, quote, source_provider)
 
     def save_daily_bars(
         self,
@@ -156,76 +55,16 @@ class SqliteMarketCache:
         bars: list[DailyBar],
         source_provider: str | None = None,
     ) -> None:
-        if not bars:
-            return
-        updated_at = utcnow_text()
-        actual_source = source_provider or provider_name
-        with self._connect() as conn:
-            conn.executemany(
-                """
-                INSERT INTO daily_bar_cache (
-                    provider_name, symbol, trade_date, updated_at, source_provider,
-                    open_price, high_price, low_price, close_price, volume, amount
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(provider_name, symbol, trade_date) DO UPDATE SET
-                    updated_at = excluded.updated_at,
-                    source_provider = excluded.source_provider,
-                    open_price = excluded.open_price,
-                    high_price = excluded.high_price,
-                    low_price = excluded.low_price,
-                    close_price = excluded.close_price,
-                    volume = excluded.volume,
-                    amount = excluded.amount
-                """,
-                [
-                    (
-                        provider_name,
-                        symbol,
-                        bar.trade_date.isoformat(),
-                        updated_at,
-                        actual_source,
-                        bar.open_price,
-                        bar.high_price,
-                        bar.low_price,
-                        bar.close_price,
-                        bar.volume,
-                        bar.amount,
-                    )
-                    for bar in bars
-                ],
-            )
+        self._bar_cache.save_daily_bars(provider_name, symbol, bars, source_provider)
 
     def load_daily_bars(self, provider_name: str, symbol: str, lookback: int, max_age_seconds: int) -> list[DailyBar]:
-        rows = self._load_daily_bar_rows(provider_name, symbol, lookback)
-        if len(rows) < lookback:
-            return []
-        latest_update = rows[-1]["updated_at"]
-        if _seconds_since(latest_update) > max_age_seconds:
-            return []
-        return [self._row_to_bar(item) for item in rows]
+        return self._bar_cache.load_daily_bars(provider_name, symbol, lookback, max_age_seconds)
 
     def load_daily_bars_any_age(self, provider_name: str, symbol: str, lookback: int) -> list[DailyBar]:
-        rows = self._load_daily_bar_rows(provider_name, symbol, lookback)
-        return [self._row_to_bar(item) for item in rows]
+        return self._bar_cache.load_daily_bars_any_age(provider_name, symbol, lookback)
 
     def get_daily_bars_cache_meta(self, provider_name: str, symbol: str, lookback: int) -> dict | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT source_provider, MAX(updated_at) AS updated_at, COUNT(*) AS count
-                FROM daily_bar_cache
-                WHERE provider_name = ? AND symbol = ?
-                """,
-                (provider_name, symbol),
-            ).fetchone()
-            if row is None or int(row["count"] or 0) < lookback:
-                return None
-            return {
-                "source_provider": str(row["source_provider"] or provider_name),
-                "updated_at": str(row["updated_at"]),
-                "age_seconds": _seconds_since(row["updated_at"]),
-                "count": int(row["count"]),
-            }
+        return self._bar_cache.get_daily_bars_cache_meta(provider_name, symbol, lookback)
 
     def get_stats(self) -> dict[str, int]:
         with self._connect() as conn:
@@ -239,129 +78,13 @@ class SqliteMarketCache:
         }
 
     def list_watchlist_symbols(self) -> list[str]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT symbol
-                FROM watchlist
-                ORDER BY added_at ASC, id ASC
-                """
-            ).fetchall()
-            return [str(row["symbol"]) for row in rows]
+        return self._watchlist_cache.list_watchlist_symbols()
 
     def add_watchlist_symbol(self, symbol: str, note: str | None = None) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO watchlist (symbol, note, added_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(symbol) DO UPDATE SET
-                    note = COALESCE(excluded.note, watchlist.note)
-                """,
-                (symbol, note, utcnow_text()),
-            )
+        self._watchlist_cache.add_watchlist_symbol(symbol, note)
 
     def remove_watchlist_symbol(self, symbol: str) -> bool:
-        with self._connect() as conn:
-            cursor = conn.execute(
-                """
-                DELETE FROM watchlist
-                WHERE symbol = ?
-                """,
-                (symbol,),
-            )
-            return cursor.rowcount > 0
-
-    def _load_daily_bar_rows(self, provider_name: str, symbol: str, lookback: int):
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM daily_bar_cache
-                WHERE provider_name = ? AND symbol = ?
-                ORDER BY trade_date DESC
-                LIMIT ?
-                """,
-                (provider_name, symbol, lookback),
-            ).fetchall()
-        return list(reversed(rows))
-
-    def _upsert_quote(
-        self,
-        conn: sqlite3.Connection,
-        provider_name: str,
-        quote: QuoteSnapshot,
-        updated_at: str,
-        source_provider: str,
-    ) -> None:
-        payload = asdict(quote)
-        conn.execute(
-            """
-            INSERT INTO quote_cache (
-                provider_name, symbol, updated_at, source_provider, name, latest_price, pct_change,
-                turnover_rate, amount, volume_ratio, pe_ttm, pb, market_cap, sector
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(provider_name, symbol) DO UPDATE SET
-                updated_at = excluded.updated_at,
-                source_provider = excluded.source_provider,
-                name = excluded.name,
-                latest_price = excluded.latest_price,
-                pct_change = excluded.pct_change,
-                turnover_rate = excluded.turnover_rate,
-                amount = excluded.amount,
-                volume_ratio = excluded.volume_ratio,
-                pe_ttm = excluded.pe_ttm,
-                pb = excluded.pb,
-                market_cap = excluded.market_cap,
-                sector = excluded.sector
-            """,
-            (
-                provider_name,
-                quote.symbol,
-                updated_at,
-                source_provider,
-                payload["name"],
-                payload["latest_price"],
-                payload["pct_change"],
-                payload["turnover_rate"],
-                payload["amount"],
-                payload["volume_ratio"],
-                payload["pe_ttm"],
-                payload["pb"],
-                payload["market_cap"],
-                payload["sector"],
-            ),
-        )
-
-    def _row_to_quote(self, row) -> QuoteSnapshot:
-        return QuoteSnapshot(
-            symbol=str(row["symbol"]),
-            name=str(row["name"]),
-            latest_price=safe_float(row["latest_price"], default=0.0) or 0.0,
-            pct_change=safe_float(row["pct_change"], default=0.0) or 0.0,
-            turnover_rate=safe_float(row["turnover_rate"], default=0.0) or 0.0,
-            amount=safe_float(row["amount"], default=0.0) or 0.0,
-            volume_ratio=safe_float(row["volume_ratio"], default=0.0) or 0.0,
-            pe_ttm=safe_float(row["pe_ttm"]),
-            pb=safe_float(row["pb"]),
-            market_cap=safe_float(row["market_cap"]),
-            sector=safe_text(row["sector"]),
-        )
-
-    def _row_to_bar(self, row) -> DailyBar:
-        trade_date = parse_trade_date(row["trade_date"])
-        if trade_date is None:
-            raise ValueError("Invalid trade_date in cache: {value}".format(value=row["trade_date"]))
-        return DailyBar(
-            symbol=str(row["symbol"]),
-            trade_date=trade_date,
-            open_price=safe_float(row["open_price"], default=0.0) or 0.0,
-            high_price=safe_float(row["high_price"], default=0.0) or 0.0,
-            low_price=safe_float(row["low_price"], default=0.0) or 0.0,
-            close_price=safe_float(row["close_price"], default=0.0) or 0.0,
-            volume=safe_float(row["volume"], default=0.0) or 0.0,
-            amount=safe_float(row["amount"], default=0.0) or 0.0,
-        )
+        return self._watchlist_cache.remove_watchlist_symbol(symbol)
 
     def _initialize(self) -> None:
         with self._connect() as conn:
