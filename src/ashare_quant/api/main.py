@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 from dataclasses import asdict
+from datetime import datetime
 import tempfile
 
 # PID file for graceful shutdown from batch script
@@ -12,8 +13,10 @@ PID_FILE = os.path.join(tempfile.gettempdir(), "aquant_api.pid")
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from ashare_quant.api.cache import APIMemoryCache
+from ashare_quant.api.trading_calendar import is_trading_time
 from ashare_quant.api.schemas import (
     BarsResponse,
     BarDataPoint,
@@ -72,6 +75,50 @@ watchlist_cache = (
 )
 
 app = FastAPI(title=settings.app_name)
+market_refresh_scheduler = BackgroundScheduler(timezone="Asia/Shanghai", daemon=True)
+
+
+def _refresh_watchlist_cache() -> None:
+    if not is_trading_time():
+        print("[market-refresh] Skipped outside trading time", flush=True)
+        return
+
+    symbols = watchlist_cache.list_watchlist_symbols()
+    refreshed = 0
+    for symbol in symbols:
+        try:
+            market_service.diagnose_watchlist_stock(symbol)
+        except Exception as exc:
+            print(f"[market-refresh] Failed to refresh {symbol}: {exc}", flush=True)
+            continue
+        refreshed += 1
+
+    if refreshed:
+        cache.clear()
+    print(f"[market-refresh] Refreshed {refreshed} watchlist stocks", flush=True)
+
+
+def _start_market_refresh_scheduler() -> None:
+    if market_refresh_scheduler.running:
+        return
+    market_refresh_scheduler.add_job(
+        _refresh_watchlist_cache,
+        "interval",
+        minutes=5,
+        id="watchlist-market-refresh",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(),
+        replace_existing=True,
+    )
+    market_refresh_scheduler.start()
+    print("[market-refresh] Scheduler started", flush=True)
+
+
+def _shutdown_market_refresh_scheduler() -> None:
+    if market_refresh_scheduler.running:
+        market_refresh_scheduler.shutdown(wait=False)
+        print("[market-refresh] Scheduler stopped", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -99,18 +146,22 @@ def _write_pid_file():
 @app.on_event("startup")
 async def _on_startup():
     _write_pid_file()
+    _start_market_refresh_scheduler()
 
 
 @app.on_event("shutdown")
 async def _on_shutdown():
+    _shutdown_market_refresh_scheduler()
     _cleanup_pid_file()
 
 
 atexit.register(_cleanup_pid_file)
+atexit.register(_shutdown_market_refresh_scheduler)
 
 
 def _force_cleanup(signum, frame):
     """Signal handler for SIGTERM to clean up PID file."""
+    _shutdown_market_refresh_scheduler()
     _cleanup_pid_file()
     sys.exit(0)
 

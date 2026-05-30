@@ -128,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { Plus, Trash2, TrendingUp, ChevronUp, Loader2 } from 'lucide-vue-next'
 import client from '../api/client'
 import type {
@@ -159,6 +159,8 @@ const removing = reactive<Record<string, boolean>>({})
 const expandedSymbol = ref<string | null>(null)
 const barsMap = reactive<Record<string, BarDataPoint[]>>({})
 const loadingBars = reactive<Record<string, boolean>>({})
+let refreshTimer: ReturnType<typeof window.setInterval> | null = null
+let refreshInFlight = false
 
 async function loadStrategies() {
   try {
@@ -169,36 +171,59 @@ async function loadStrategies() {
   }
 }
 
-async function loadWatchlist() {
-  loadingList.value = true
+async function loadWatchlist(options: { silent?: boolean } = {}) {
+  const silent = options.silent === true
+  if (!silent) {
+    loadingList.value = true
+  }
   error.value = ''
   try {
     const res = await client.get<WatchlistListResponse>('/api/watchlist/list')
-    symbols.value = res.data.symbols
-    symbols.value.forEach((symbol) => loadRow(symbol))
+    const nextSymbols = res.data.symbols
+    symbols.value = nextSymbols
+    pruneRemovedSymbols(nextSymbols)
+    if (nextSymbols.length) {
+      await loadRows(nextSymbols)
+      await refreshLoadedBars(nextSymbols)
+    }
   } catch (e: any) {
     error.value = e.message || '请求失败'
   } finally {
-    loadingList.value = false
+    if (!silent) {
+      loadingList.value = false
+    }
   }
 }
 
-async function loadRow(symbol: string) {
-  loadingRows[symbol] = true
-  rowErrors[symbol] = ''
+async function loadRows(targetSymbols: string[]) {
+  if (!targetSymbols.length) return
+  targetSymbols.forEach((symbol) => {
+    loadingRows[symbol] = true
+    rowErrors[symbol] = ''
+  })
   try {
     const res = await client.post<WatchlistResponse>('/api/watchlist', {
-      symbols: [symbol],
+      symbols: targetSymbols,
       strategy: strategy.value,
     })
-    const row = res.data.rows[0]
-    if (row) {
-      rowMap[symbol] = row
-    }
+    const loaded = new Set<string>()
+    res.data.rows.forEach((row) => {
+      rowMap[row.symbol] = row
+      loaded.add(row.symbol)
+    })
+    targetSymbols.forEach((symbol) => {
+      if (!loaded.has(symbol)) {
+        rowErrors[symbol] = '诊断失败'
+      }
+    })
   } catch (e: any) {
-    rowErrors[symbol] = e.message || '诊断失败'
+    targetSymbols.forEach((symbol) => {
+      rowErrors[symbol] = e.message || '诊断失败'
+    })
   } finally {
-    loadingRows[symbol] = false
+    targetSymbols.forEach((symbol) => {
+      loadingRows[symbol] = false
+    })
   }
 }
 
@@ -209,26 +234,38 @@ async function toggleChart(symbol: string) {
   }
   expandedSymbol.value = symbol
   if (!barsMap[symbol] || barsMap[symbol].length === 0) {
-    loadingBars[symbol] = true
-    try {
-      const res = await client.get<BarsResponse>(`/api/stocks/${symbol}/bars`, {
-        params: { lookback: 60 },
-      })
-      const allBars = res.data.bars
-      barsMap[symbol] = allBars.slice(-30)
-    } catch (e: any) {
-      console.error(`加载 ${symbol} 的日线数据失败`, e)
-    } finally {
-      loadingBars[symbol] = false
-    }
+    await loadBars(symbol)
   }
 }
 
+async function loadBars(symbol: string) {
+  loadingBars[symbol] = true
+  try {
+    const res = await client.get<BarsResponse>(`/api/stocks/${symbol}/bars`, {
+      params: { lookback: 60 },
+    })
+    const allBars = res.data.bars
+    barsMap[symbol] = allBars.slice(-30)
+  } catch (e: any) {
+    console.error(`Failed to load bars for ${symbol}`, e)
+  } finally {
+    loadingBars[symbol] = false
+  }
+}
+
+async function refreshLoadedBars(activeSymbols: string[]) {
+  const activeSet = new Set(activeSymbols)
+  const loadedSymbols = Object.keys(barsMap).filter((symbol) => activeSet.has(symbol))
+  await Promise.all(loadedSymbols.map((symbol) => loadBars(symbol)))
+}
+
 async function reloadRows() {
-  symbols.value.forEach((symbol) => {
+  const currentSymbols = [...symbols.value]
+  currentSymbols.forEach((symbol) => {
     delete rowMap[symbol]
-    loadRow(symbol)
   })
+  await loadRows(currentSymbols)
+  await refreshLoadedBars(currentSymbols)
 }
 
 async function addSymbol() {
@@ -282,6 +319,38 @@ async function removeSymbol(symbol: string) {
   }
 }
 
+function pruneRemovedSymbols(activeSymbols: string[]) {
+  const activeSet = new Set(activeSymbols)
+  Object.keys(rowMap).forEach((symbol) => {
+    if (!activeSet.has(symbol)) delete rowMap[symbol]
+  })
+  Object.keys(loadingRows).forEach((symbol) => {
+    if (!activeSet.has(symbol)) delete loadingRows[symbol]
+  })
+  Object.keys(rowErrors).forEach((symbol) => {
+    if (!activeSet.has(symbol)) delete rowErrors[symbol]
+  })
+  Object.keys(barsMap).forEach((symbol) => {
+    if (!activeSet.has(symbol)) delete barsMap[symbol]
+  })
+  Object.keys(loadingBars).forEach((symbol) => {
+    if (!activeSet.has(symbol)) delete loadingBars[symbol]
+  })
+  if (expandedSymbol.value && !activeSet.has(expandedSymbol.value)) {
+    expandedSymbol.value = null
+  }
+}
+
+async function pollWatchlist() {
+  if (refreshInFlight) return
+  refreshInFlight = true
+  try {
+    await loadWatchlist({ silent: true })
+  } finally {
+    refreshInFlight = false
+  }
+}
+
 function normalizeInput(value: string): string {
   const trimmed = value.trim().toUpperCase()
   if (!trimmed || /[,，\s]/.test(trimmed)) return ''
@@ -301,5 +370,13 @@ function pctColor(val: string | number): string {
 onMounted(() => {
   loadStrategies()
   loadWatchlist()
+  refreshTimer = window.setInterval(pollWatchlist, 300000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer !== null) {
+    window.clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
